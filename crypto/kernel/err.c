@@ -79,6 +79,7 @@ srtp_err_status_t srtp_install_err_report_handler(srtp_err_report_handler_func_t
 
 void srtp_err_report (srtp_err_reporting_level_t level, const char *format, ...)
 {
+    srtp_err_file = stdout; // XXX
     va_list args;
     if (srtp_err_file != NULL) {
         va_start(args, format);

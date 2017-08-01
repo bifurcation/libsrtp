@@ -56,7 +56,7 @@
 #include "crypto_types.h"
 
 srtp_debug_module_t srtp_mod_double = {
-    0,               /* debugging is off by default */
+    1,               /* debugging is off by default */
     "double"         /* printable module name       */
 };
 
@@ -127,9 +127,10 @@ typedef struct {
 
 #endif
 
-srtp_err_status_t apply_ohb(uint8_t *payload, int payload_len, srtp_hdr_t *hdr, unsigned int *hdr_len) {
+srtp_err_status_t apply_ohb(uint8_t *payload, int payload_len, srtp_hdr_t *hdr, unsigned int *ohb_len, unsigned int *hdr_len) {
     size_t remaining = payload_len - 1;
     ohb_t *ohb = (ohb_t *) (payload + remaining);
+    *ohb_len = 1;
 
     /* remove extension and unset the X bit */
     *hdr_len = 12 + (4 * hdr->cc);
@@ -137,6 +138,8 @@ srtp_err_status_t apply_ohb(uint8_t *payload, int payload_len, srtp_hdr_t *hdr, 
 
     /* check reserved bits */
     if (ohb->r != 0) {
+       debug_print(srtp_mod_double, "reserved bits not zero %02x", payload[remaining]);
+       debug_print(srtp_mod_double, "                   ==> %02x", ohb->r);
        return srtp_err_status_bad_param;
     }
 
@@ -148,22 +151,27 @@ srtp_err_status_t apply_ohb(uint8_t *payload, int payload_len, srtp_hdr_t *hdr, 
     /* apply sequence number changes */
     if (ohb->q != 0) {
         if (remaining < 2) {
+            debug_print(srtp_mod_double, "no bytes remaining for SEQ %02x", remaining);
             return srtp_err_status_bad_param;
         }
 
         hdr->seq = payload[remaining-2];
         hdr->seq <<= 8;
         hdr->seq += payload[remaining-1];
+
+        *ohb_len += 2;
         remaining -= 2;
     }
 
     /* apply payload type changes */
     if (ohb->p != 0) {
         if (remaining < 1) {
+            debug_print(srtp_mod_double, "no bytes remaining for PT %02x", remaining);
             return srtp_err_status_bad_param;
         }
 
         hdr->pt = payload[remaining-1] & 0x7f;
+        *ohb_len += 1;
         remaining -= 1;
     }
 
@@ -270,13 +278,25 @@ static srtp_err_status_t srtp_double_context_init (void* cv, const uint8_t *key)
     debug_print(srtp_mod_double, "init with key %s",
                 srtp_octet_string_hex_string(key, c->inner_key_size + c->outer_key_size));
 
-    /* Initialize the inner and outer contexts */
+    /* Initialize the inner context */
     err = c->inner->type->init(c->inner->state, key);
     if (err != srtp_err_status_ok) {
         return err;
     }
 
-    return c->outer->type->init(c->outer->state, key + c->inner_key_size);
+    debug_print(srtp_mod_double, "inner key: %s",
+                srtp_octet_string_hex_string(key, c->inner_key_size));
+
+    /* Initialize the outer context */
+    err = c->inner->type->init(c->outer->state, key + c->inner_key_size);
+    if (err != srtp_err_status_ok) {
+        return err;
+    }
+
+    debug_print(srtp_mod_double, "outer key: %s",
+                srtp_octet_string_hex_string(key + c->inner_key_size, c->outer_key_size));
+
+    return (srtp_err_status_ok);
 }
 
 
@@ -358,12 +378,17 @@ static srtp_err_status_t srtp_double_encrypt (void *cv, unsigned char *buf, unsi
     /*
      * Apply null OHB (strip extension and unset X)
      */
+    uint8_t ohb = 0;
+    uint32_t ohb_len = 0;
     uint32_t inner_aad_len = 0;
     srtp_hdr_t *hdr = (srtp_hdr_t *) c->inner_aad;
-    err = apply_ohb(buf, *enc_len, hdr, &inner_aad_len);
+    err = apply_ohb(&ohb, 1, hdr, &ohb_len, &inner_aad_len);
     if (err != srtp_err_status_ok) {
         return err;
     }
+
+    debug_print(srtp_mod_double, "AAD after OHB: %s",
+                srtp_octet_string_hex_string(c->inner_aad, inner_aad_len));
 
     /*
      * Set inner AAD
@@ -401,14 +426,17 @@ static srtp_err_status_t srtp_double_encrypt (void *cv, unsigned char *buf, unsi
                 srtp_octet_string_hex_string(c->inner_aad, inner_aad_len));
 
     /*
-     * Append a null OHB
+     * Append the null OHB
      */
-    buf[*enc_len] = 0;
+    buf[*enc_len] = ohb;
     *enc_len += 1;
 
     debug_print(srtp_mod_double, "outer plaintext: %s",
                 srtp_octet_string_hex_string(buf, *enc_len));
 
+    /*
+     * Encrypt with the outer transform
+     */
     err = c->outer->type->encrypt(c->outer->state, buf, enc_len);
 
     debug_print(srtp_mod_double, "outer ciphertext: %s",
@@ -430,6 +458,8 @@ static srtp_err_status_t srtp_double_encrypt (void *cv, unsigned char *buf, unsi
  */
 static srtp_err_status_t srtp_double_get_tag (void *cv, uint8_t *buf, uint32_t *len)
 {
+
+
     srtp_double_ctx_t *c = (srtp_double_ctx_t *)cv;
     return c->outer->type->get_tag(c->outer->state, buf, len);
 }
@@ -467,12 +497,19 @@ static srtp_err_status_t srtp_double_decrypt (void *cv, unsigned char *buf, unsi
      *
      * NOTE: Assumes that set_aad has already been called.
      */
+    uint32_t ohb_len = 0;
     uint32_t inner_aad_len = 0;
     srtp_hdr_t *hdr = (srtp_hdr_t *) c->inner_aad;
-    err = apply_ohb(buf, *enc_len, hdr, &inner_aad_len);
+    err = apply_ohb(buf, *enc_len, hdr, &ohb_len, &inner_aad_len);
     if (err != srtp_err_status_ok) {
         return err;
     }
+
+    debug_print(srtp_mod_double, "Decoded OHB: %d", ohb_len);
+    *enc_len -= ohb_len;
+
+    debug_print(srtp_mod_double, "AAD after OHB: %s",
+                srtp_octet_string_hex_string(c->inner_aad, inner_aad_len));
 
     /*
      * Set inner AAD
@@ -484,7 +521,8 @@ static srtp_err_status_t srtp_double_decrypt (void *cv, unsigned char *buf, unsi
 
     debug_print(srtp_mod_double, "inner aad: %s",
                 srtp_octet_string_hex_string(c->inner_aad, inner_aad_len));
-
+    debug_print(srtp_mod_double, "inner ciphertext: %s",
+                srtp_octet_string_hex_string(buf, *enc_len));
 
     /*
      * Undo the inner transform
@@ -525,8 +563,8 @@ extern const srtp_cipher_type_t srtp_aes_gcm_256_openssl;
  * The following are the global singleton instances for the
  * 128-bit and 256-bit GCM ciphers.
  */
-extern const srtp_cipher_type_t srtp_aes_gcm_128_double_openssl;
-extern const srtp_cipher_type_t srtp_aes_gcm_256_double_openssl;
+extern const srtp_cipher_type_t srtp_aes_gcm_128_double;
+extern const srtp_cipher_type_t srtp_aes_gcm_256_double;
 
 
 /*
@@ -537,7 +575,7 @@ extern const srtp_cipher_type_t srtp_aes_gcm_256_double_openssl;
  *   * 44 = 16 + 16 + 12
  *   * 76 = 32 + 32 + 12
  */
-static srtp_err_status_t srtp_aes_gcm_double_openssl_alloc (srtp_cipher_t **c, int key_len, int tag_len)
+static srtp_err_status_t srtp_aes_gcm_double_alloc (srtp_cipher_t **c, int key_len, int tag_len)
 {
     int base_key_size;
     int base_tag_size;
@@ -563,16 +601,18 @@ static srtp_err_status_t srtp_aes_gcm_double_openssl_alloc (srtp_cipher_t **c, i
         base_key_size = SRTP_AES_128_KEY_LEN;
         base_tag_size = GCM_AUTH_TAG_LEN;
         base_type = &srtp_aes_gcm_128_openssl;
-        total_type = &srtp_aes_gcm_128_double_openssl;
+        total_type = &srtp_aes_gcm_128_double;
         algorithm = SRTP_AES_GCM_128_DOUBLE;
         break;
     case SRTP_AES_GCM_256_DOUBLE_KEY_LEN_WSALT:
         base_key_size = SRTP_AES_256_KEY_LEN;
         base_tag_size = GCM_AUTH_TAG_LEN;
         base_type = &srtp_aes_gcm_256_openssl;
-        total_type = &srtp_aes_gcm_256_double_openssl;
+        total_type = &srtp_aes_gcm_256_double;
         algorithm = SRTP_AES_GCM_256_DOUBLE;
         break;
+    default:
+        return (srtp_err_status_bad_param);
     }
 
     return srtp_double_alloc(base_type, base_type,
@@ -592,7 +632,7 @@ static const char srtp_aes_gcm_256_double_description[] = "Double AES-256 GCM";
 /*
  * KAT values for AES self-test.  These
  * values we're derived from independent test code
- * using OpenSSL.
+ * using python.
  */
 static const uint8_t srtp_aes_gcm_double_test_case_128_key[44] = {
     0x48, 0x23, 0x83, 0xca, 0x8e, 0x4e, 0xb2, 0xeb,
@@ -625,18 +665,18 @@ static const uint8_t srtp_aes_gcm_double_test_case_plaintext[60] = {
 };
 
 static const uint8_t srtp_aes_gcm_double_test_case_128_ciphertext[93] = {
-    0x85, 0x29, 0xe6, 0x38, 0xf8, 0x9a, 0x1f, 0xf1,
-    0x23, 0x8e, 0x05, 0xa4, 0xad, 0xfe, 0x65, 0x0f,
-    0x40, 0x36, 0x8f, 0xf4, 0xd9, 0xcc, 0xca, 0x20,
-    0x02, 0x42, 0xd0, 0x9f, 0x82, 0x71, 0x59, 0xd6,
-    0xe7, 0xbe, 0x6f, 0xd4, 0xfe, 0x49, 0x96, 0x62,
-    0xdf, 0xdf, 0xf3, 0x46, 0xdb, 0x43, 0x7c, 0x4f,
-    0x1a, 0x22, 0x52, 0xe0, 0xcf, 0x9e, 0x51, 0x9a,
-    0x2d, 0x25, 0xbc, 0xab, 0x30, 0x86, 0x40, 0x60,
-    0x09, 0xac, 0x9e, 0xd3, 0xf8, 0x69, 0x85, 0x71,
-    0x50, 0xc0, 0xd1, 0x69, 0x19, 0xb4, 0xa0, 0x49,
-    0x32, 0x4e, 0x01, 0xc1, 0x02, 0x2c, 0x9d, 0x9d,
-    0xcc, 0xed, 0x48, 0x65, 0xba,
+    0x14, 0x9d, 0xc0, 0xb9, 0x2a, 0xa0, 0x36, 0x91,
+    0x52, 0x53, 0xc4, 0x22, 0x82, 0x4e, 0xec, 0x4a,
+    0x14, 0x2d, 0xc9, 0x40, 0xa5, 0x0f, 0xcd, 0x8e,
+    0x5d, 0x2e, 0x9c, 0x61, 0x9f, 0x13, 0x3c, 0x02,
+    0xd8, 0x5f, 0x9e, 0x54, 0xbb, 0xc0, 0xec, 0xd5,
+    0xb3, 0xe5, 0x22, 0xde, 0xd0, 0xdf, 0x51, 0xe1,
+    0x1c, 0xda, 0x6e, 0x5b, 0xca, 0x54, 0xf8, 0x77,
+    0x1a, 0x7d, 0xbf, 0xb7, 0x96, 0x0d, 0xab, 0xd3,
+    0xeb, 0x67, 0xdd, 0xe8, 0xd7, 0x6b, 0xc2, 0x0e,
+    0x95, 0x07, 0x05, 0xb5, 0x8a, 0xc3, 0xed, 0x43,
+    0xdf, 0xcc, 0xb7, 0x13, 0xb7, 0x38, 0x16, 0x4c,
+    0x13, 0xae, 0x86, 0xdd, 0x14,
 };
 
 static const srtp_cipher_test_case_t srtp_aes_gcm_double_test_case_128 = {
@@ -667,23 +707,22 @@ static const uint8_t srtp_aes_gcm_double_test_case_256_key[76] = {
 };
 
 static const uint8_t srtp_aes_gcm_double_test_case_256_ciphertext[93] = {
-    0xe1, 0x14, 0xbb, 0x98, 0x7a, 0x0e, 0xc0, 0xbc,
-    0x48, 0x6f, 0x96, 0xc1, 0x66, 0x2e, 0xf3, 0x2b,
-    0x3f, 0x76, 0xb5, 0xc8, 0x61, 0x9b, 0xfe, 0xce,
-    0x28, 0xb4, 0x34, 0x1b, 0xb0, 0x32, 0x39, 0x5f,
-    0xa6, 0x57, 0x14, 0x5f, 0x4e, 0x83, 0x47, 0xa7,
-    0xd7, 0xf9, 0x9e, 0xaa, 0x72, 0xc5, 0x27, 0x39,
-    0xa8, 0x96, 0xf5, 0x4a, 0xef, 0xc3, 0xfa, 0xbe,
-    0x19, 0x48, 0xba, 0x7c, 0x87, 0x43, 0xf9, 0xf5,
-    0x20, 0x44, 0x59, 0xcc, 0x8d, 0x00, 0x43, 0x27,
-    0x75, 0x12, 0xf3, 0x92, 0xbf, 0xd4, 0xd0, 0xc1,
-    0x9b, 0xee, 0xa3, 0x3d, 0xcc, 0x86, 0x46, 0xb9,
-    0x68, 0xb5, 0x8e, 0xc3, 0x73,
+    0x55, 0x45, 0xf2, 0xe7, 0xcf, 0x9c, 0x5d, 0x3c,
+    0x0b, 0x85, 0x31, 0x81, 0x5e, 0x34, 0x38, 0x4d,
+    0x6d, 0x90, 0x39, 0xb7, 0x49, 0x84, 0x5e, 0xb4,
+    0xa2, 0xb1, 0x02, 0x4f, 0xd6, 0xeb, 0x89, 0x07,
+    0x7d, 0xe1, 0x36, 0x59, 0x9b, 0x1c, 0xe8, 0xa9,
+    0x1d, 0xda, 0xa8, 0x78, 0xfb, 0x0f, 0x2e, 0x3c,
+    0x80, 0x30, 0x33, 0x81, 0x86, 0x65, 0x2e, 0x67,
+    0x81, 0xc3, 0xf0, 0xbd, 0xab, 0x94, 0xcb, 0x32,
+    0x80, 0xdd, 0x62, 0x21, 0x3e, 0x42, 0x46, 0x0f,
+    0xbe, 0xe2, 0x49, 0x8f, 0xf8, 0xd1, 0x30, 0x54,
+    0xea, 0xe0, 0x2d, 0xe2, 0xba, 0xc6, 0xb9, 0x16,
+    0x86, 0x8d, 0xeb, 0x56, 0x51,
 };
 
-
 static const srtp_cipher_test_case_t srtp_aes_gcm_double_test_case_256 = {
-    SRTP_AES_GCM_128_DOUBLE_KEY_LEN_WSALT,            /* octets in key            */
+    SRTP_AES_GCM_256_DOUBLE_KEY_LEN_WSALT,            /* octets in key            */
     srtp_aes_gcm_double_test_case_256_key,            /* key                      */
     srtp_aes_gcm_double_test_case_iv,                 /* packet index             */
     60,                                               /* octets in plaintext      */
@@ -699,8 +738,8 @@ static const srtp_cipher_test_case_t srtp_aes_gcm_double_test_case_256 = {
 /*
  * This is the vector function table for this crypto engine.
  */
-const srtp_cipher_type_t srtp_aes_gcm_128_double_openssl = {
-    srtp_aes_gcm_double_openssl_alloc,
+const srtp_cipher_type_t srtp_aes_gcm_128_double = {
+    srtp_aes_gcm_double_alloc,
     srtp_double_dealloc,
     srtp_double_context_init,
     srtp_double_set_aad,
@@ -716,8 +755,8 @@ const srtp_cipher_type_t srtp_aes_gcm_128_double_openssl = {
 /*
  * This is the vector function table for this crypto engine.
  */
-const srtp_cipher_type_t srtp_aes_gcm_256_double_openssl = {
-    srtp_aes_gcm_double_openssl_alloc,
+const srtp_cipher_type_t srtp_aes_gcm_256_double = {
+    srtp_aes_gcm_double_alloc,
     srtp_double_dealloc,
     srtp_double_context_init,
     srtp_double_set_aad,

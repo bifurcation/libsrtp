@@ -4503,6 +4503,12 @@ srtp_crypto_policy_set_from_profile_for_rtp(srtp_crypto_policy_t *policy,
     case srtp_profile_aead_aes_256_gcm:
         srtp_crypto_policy_set_aes_gcm_256_16_auth(policy);
         break;
+    case srtp_profile_aead_aes_128_gcm_double:
+        srtp_crypto_policy_set_aes_gcm_128_double(policy);
+        break;
+    case srtp_profile_aead_aes_256_gcm_double:
+        srtp_crypto_policy_set_aes_gcm_256_double(policy);
+        break;
 #endif
     /* the following profiles are not (yet) supported */
     case srtp_profile_null_sha1_32:

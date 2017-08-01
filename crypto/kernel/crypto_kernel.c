@@ -78,8 +78,8 @@ extern srtp_cipher_type_t srtp_aes_icm_256;
 extern srtp_cipher_type_t srtp_aes_icm_192;
 extern srtp_cipher_type_t srtp_aes_gcm_128_openssl;
 extern srtp_cipher_type_t srtp_aes_gcm_256_openssl;
-extern srtp_cipher_type_t srtp_aes_gcm_128_double_openssl;
-extern srtp_cipher_type_t srtp_aes_gcm_256_double_openssl;
+extern srtp_cipher_type_t srtp_aes_gcm_128_double;
+extern srtp_cipher_type_t srtp_aes_gcm_256_double;
 #endif
 
 /* debug modules for cipher types */
@@ -186,11 +186,11 @@ srtp_err_status_t srtp_crypto_kernel_init ()
     if (status) {
         return status;
     }
-    status = srtp_crypto_kernel_load_cipher_type(&srtp_aes_gcm_128_double_openssl, SRTP_AES_GCM_128_DOUBLE);
+    status = srtp_crypto_kernel_load_cipher_type(&srtp_aes_gcm_128_double, SRTP_AES_GCM_128_DOUBLE);
     if (status) {
         return status;
     }
-    status = srtp_crypto_kernel_load_cipher_type(&srtp_aes_gcm_256_double_openssl, SRTP_AES_GCM_256_DOUBLE);
+    status = srtp_crypto_kernel_load_cipher_type(&srtp_aes_gcm_256_double, SRTP_AES_GCM_256_DOUBLE);
     if (status) {
         return status;
     }

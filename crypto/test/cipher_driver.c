@@ -127,8 +127,8 @@ extern srtp_cipher_type_t srtp_aes_icm_256;
 extern srtp_cipher_type_t srtp_aes_icm_192;
 extern srtp_cipher_type_t srtp_aes_gcm_128_openssl;
 extern srtp_cipher_type_t srtp_aes_gcm_256_openssl;
-extern srtp_cipher_type_t srtp_aes_gcm_128_double_openssl;
-extern srtp_cipher_type_t srtp_aes_gcm_256_double_openssl;
+extern srtp_cipher_type_t srtp_aes_gcm_128_double;
+extern srtp_cipher_type_t srtp_aes_gcm_256_double;
 #endif
 
 int
@@ -202,11 +202,11 @@ main(int argc, char *argv[]) {
     }
 
     for (num_cipher=1; num_cipher < max_num_cipher; num_cipher *=8) {
-      cipher_driver_test_array_throughput(&srtp_aes_gcm_128_double_openssl, SRTP_AES_GCM_128_KEY_LEN_WSALT, num_cipher);
+      cipher_driver_test_array_throughput(&srtp_aes_gcm_128_double, SRTP_AES_GCM_128_KEY_LEN_WSALT, num_cipher);
     }
 
     for (num_cipher=1; num_cipher < max_num_cipher; num_cipher *=8) {
-      cipher_driver_test_array_throughput(&srtp_aes_gcm_256_double_openssl, SRTP_AES_GCM_256_KEY_LEN_WSALT, num_cipher);
+      cipher_driver_test_array_throughput(&srtp_aes_gcm_256_double, SRTP_AES_GCM_256_KEY_LEN_WSALT, num_cipher);
     }
 #endif
   }
@@ -219,8 +219,8 @@ main(int argc, char *argv[]) {
     cipher_driver_self_test(&srtp_aes_icm_192);
     cipher_driver_self_test(&srtp_aes_gcm_128_openssl);
     cipher_driver_self_test(&srtp_aes_gcm_256_openssl);
-    cipher_driver_self_test(&srtp_aes_gcm_128_double_openssl);
-    cipher_driver_self_test(&srtp_aes_gcm_256_double_openssl);
+    cipher_driver_self_test(&srtp_aes_gcm_128_double);
+    cipher_driver_self_test(&srtp_aes_gcm_256_double);
 #endif
   }
 
@@ -322,8 +322,8 @@ main(int argc, char *argv[]) {
     status = srtp_cipher_dealloc(c);
     check_status(status);
 
-    /* run the throughput test on the aes_gcm_128_double_openssl cipher */
-    status = srtp_cipher_type_alloc(&srtp_aes_gcm_128_double_openssl, &c, SRTP_AES_GCM_128_DOUBLE_KEY_LEN_WSALT, 32);
+    /* run the throughput test on the aes_gcm_128_double cipher */
+    status = srtp_cipher_type_alloc(&srtp_aes_gcm_128_double, &c, SRTP_AES_GCM_128_DOUBLE_KEY_LEN_WSALT, 32);
     if (status) {
         fprintf(stderr, "error: can't allocate double GCM 128 cipher\n");
         exit(status);
@@ -341,8 +341,8 @@ main(int argc, char *argv[]) {
     status = srtp_cipher_dealloc(c);
     check_status(status);
 
-    /* run the throughput test on the aes_gcm_256_double_openssl cipher */
-    status = srtp_cipher_type_alloc(&srtp_aes_gcm_256_double_openssl, &c, SRTP_AES_GCM_256_DOUBLE_KEY_LEN_WSALT, 32);
+    /* run the throughput test on the aes_gcm_256_double cipher */
+    status = srtp_cipher_type_alloc(&srtp_aes_gcm_256_double, &c, SRTP_AES_GCM_256_DOUBLE_KEY_LEN_WSALT, 32);
     if (status) {
         fprintf(stderr, "error: can't allocate double GCM 256 cipher\n");
         exit(status);

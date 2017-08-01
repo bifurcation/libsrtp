@@ -2917,7 +2917,7 @@ srtp_test_empty_payload_gcm_double()
         return status;
     }
 
-    mesg = srtp_create_test_packet(0, policy.ssrc.value);
+    mesg = srtp_create_test_packet(0, policy.ssrc.value, &len);
     if (mesg == NULL) {
         return srtp_err_status_fail;
     }

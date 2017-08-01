@@ -271,6 +271,7 @@ srtp_err_status_t srtp_cipher_type_test (const srtp_cipher_type_t *ct, const srt
              */
             status = srtp_cipher_set_aad(c, test_case->aad, test_case->aad_length_octets);
             if (status) {
+                printf("failure to set aad: %d\n", status);
                 srtp_cipher_dealloc(c);
                 return status;
             }
@@ -283,6 +284,7 @@ srtp_err_status_t srtp_cipher_type_test (const srtp_cipher_type_t *ct, const srt
         len = test_case->plaintext_length_octets;
         status = srtp_cipher_encrypt(c, buffer, &len);
         if (status) {
+            printf("failure to encrypt: %d\n", status);
             srtp_cipher_dealloc(c);
             return status;
         }
