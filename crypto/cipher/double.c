@@ -61,7 +61,7 @@ srtp_debug_module_t srtp_mod_double = {
 };
 
 #define MAX_AAD_LEN                512
-#define MAX_TAG_LEN                64
+#define MAX_HDR_LEN                64
 
 /*
  * The double framework can be used with different combinations of ciphers.
@@ -77,9 +77,7 @@ typedef struct {
     int outer_tag_size;
     srtp_cipher_t *inner;
     srtp_cipher_t *outer;
-    int do_inner;
     uint8_t inner_aad[MAX_AAD_LEN];
-    uint8_t inner_tag[MAX_TAG_LEN];
 } srtp_double_ctx_t;
 
 /* XXX: srtp_hdr_t borrowed from srtp_priv.h */
@@ -97,6 +95,14 @@ typedef struct {
     uint32_t ssrc;             /* synchronization source */
 } srtp_hdr_t;
 
+typedef struct {
+    unsigned char q : 1;       /* SEQ is present */
+    unsigned char p : 1;       /* PT is present */
+    unsigned char m : 1;       /* marker bit is present */
+    unsigned char b : 1;       /* value of the marker bit */
+    unsigned char r : 4;       /* reserved bits */
+} ohb_t;
+
 #else /*  BIG_ENDIAN */
 
 typedef struct {
@@ -111,17 +117,59 @@ typedef struct {
     uint32_t ssrc;             /* synchronization source */
 } srtp_hdr_t;
 
+typedef struct {
+    unsigned char r : 4;       /* reserved bits */
+    unsigned char b : 1;       /* value of the marker bit */
+    unsigned char m : 1;       /* marker bit is present */
+    unsigned char p : 1;       /* PT is present */
+    unsigned char q : 1;       /* SEQ is present */
+} ohb_t;
+
 #endif
 
-/* XXX: borrowed from srtp_priv.h */
-typedef struct {
-  uint16_t profile_specific;   /* profile-specific info               */
-  uint16_t length;             /* number of 32-bit words in extension */
-} srtp_hdr_xtnd_t;
+srtp_err_status_t apply_ohb(uint8_t *payload, int payload_len, srtp_hdr_t *hdr, unsigned int *hdr_len) {
+    size_t remaining = payload_len - 1;
+    ohb_t *ohb = (ohb_t *) (payload + remaining);
 
-#define RTP_HDR_LEN       12
-#define RTP_EXT_HDR_LEN   4
-#define E2EEL_LEN         2
+    /* remove extension and unset the X bit */
+    *hdr_len = 12 + (4 * hdr->cc);
+    hdr->x = 0;
+
+    /* check reserved bits */
+    if (ohb->r != 0) {
+       return srtp_err_status_bad_param;
+    }
+
+    /* apply marker bit changes */
+    if (ohb->m != 0) {
+      hdr->m = ohb->b;
+    }
+
+    /* apply sequence number changes */
+    if (ohb->q != 0) {
+        if (remaining < 2) {
+            return srtp_err_status_bad_param;
+        }
+
+        hdr->seq = payload[remaining-2];
+        hdr->seq <<= 8;
+        hdr->seq += payload[remaining-1];
+        remaining -= 2;
+    }
+
+    /* apply payload type changes */
+    if (ohb->p != 0) {
+        if (remaining < 1) {
+            return srtp_err_status_bad_param;
+        }
+
+        hdr->pt = payload[remaining-1] & 0x7f;
+        remaining -= 1;
+    }
+
+    return srtp_err_status_ok;
+}
+
 
 /*
  * This function allocates an instance of a doubled cipher, allowing general
@@ -216,30 +264,16 @@ static srtp_err_status_t srtp_double_dealloc (srtp_cipher_t *c)
  */
 static srtp_err_status_t srtp_double_context_init (void* cv, const uint8_t *key)
 {
-    uint8_t inner_non_zero;
     srtp_err_status_t err;
     srtp_double_ctx_t *c = (srtp_double_ctx_t *)cv;
 
     debug_print(srtp_mod_double, "init with key %s",
                 srtp_octet_string_hex_string(key, c->inner_key_size + c->outer_key_size));
 
-    /* This context performs the inner transform iff the inner key is not all zero */
-    inner_non_zero = 0;
-    for (int i=0; i < c->inner_key_size; i++) {
-        inner_non_zero |= key[i];
-    }
-
-    c->do_inner = 0;
-    if (inner_non_zero != 0) {
-        c->do_inner = 1;
-    }
-
     /* Initialize the inner and outer contexts */
-    if (c->do_inner) {
-        err = c->inner->type->init(c->inner->state, key);
-        if (err != srtp_err_status_ok) {
-            return err;
-        }
+    err = c->inner->type->init(c->inner->state, key);
+    if (err != srtp_err_status_ok) {
+        return err;
     }
 
     return c->outer->type->init(c->outer->state, key + c->inner_key_size);
@@ -261,11 +295,9 @@ static srtp_err_status_t srtp_double_set_iv (void *cv, uint8_t *iv, srtp_cipher_
     debug_print(srtp_mod_double, "iv: %s",
                 srtp_octet_string_hex_string(iv, 12));
 
-    if (c->do_inner) {
-        err = c->inner->type->set_iv(c->inner->state, iv, direction);
-        if (err != srtp_err_status_ok) {
-            return err;
-        }
+    err = c->inner->type->set_iv(c->inner->state, iv, direction);
+    if (err != srtp_err_status_ok) {
+        return err;
     }
 
     return c->outer->type->set_iv(c->outer->state, iv, direction);
@@ -283,121 +315,28 @@ static srtp_err_status_t srtp_double_set_aad (void *cv, const uint8_t *aad, uint
 {
     srtp_err_status_t err;
     srtp_double_ctx_t *c = (srtp_double_ctx_t *)cv;
-    srtp_hdr_t *hdr;
-    srtp_hdr_xtnd_t *ext_hdr;
-    int inner_aad_len;
-    int ext_hdr_len;
-    int ext_len;
-    uint8_t *ext_data;
-    uint8_t ohb_r_pt;
-    uint16_t ohb_seq;
-    uint16_t e2e_ext_len;
 
     debug_print(srtp_mod_double, "aad: %s",
                 srtp_octet_string_hex_string(aad, aad_len));
 
-    /*
-     * Process the End-to-End Extensions Length and Original Headers Block
-     * extensions to determine the inner AAD.
-     *
-     * TODO: Move this to be gated on c->do_inner?
-     */
-    if ((aad_len < RTP_HDR_LEN) || (aad_len > MAX_AAD_LEN)) {
+    /* The outer AAD is the header as provided */
+    debug_print(srtp_mod_double, "outer aad: %s",
+                srtp_octet_string_hex_string(aad, aad_len));
+    err = c->outer->type->set_aad(c->outer->state, aad, aad_len);
+    if (err != srtp_err_status_ok) {
+        return err;
+    }
+
+    /* For the inner AAD, we will need to cache the AAD until we have the payload */
+    if (aad_len > MAX_AAD_LEN) {
         return (srtp_err_status_bad_param);
     }
 
-    /* By default, inner AAD only covers the base header */
-    memcpy(c->inner_aad, aad, aad_len);
-    hdr = (srtp_hdr_t *)c->inner_aad;
-    inner_aad_len = RTP_HDR_LEN + (4 * hdr->cc);
-
-    if (hdr->x == 1) {
-        ext_hdr = (srtp_hdr_xtnd_t *)(c->inner_aad + inner_aad_len);
-        if (ntohs(ext_hdr->profile_specific) == 0xbede) {
-            ext_hdr_len = 1;
-        } else if ((ntohs(ext_hdr->profile_specific) & 0x1fff) == 0x100) {
-            ext_hdr_len = 2;
-        } else {
-            debug_print(srtp_mod_double, "bad ext_hdr_len %04x", ntohs(ext_hdr->profile_specific));
-            return (srtp_err_status_bad_param);
-        }
-
-        debug_print(srtp_mod_double, "ext header len: %d", ext_hdr_len);
-
-        /* If len of first extn == 2, append to inner_aad */
-        ext_data = ((uint8_t*)ext_hdr) + sizeof(srtp_hdr_xtnd_t);
-        ext_len = (ext_hdr_len == 2)? *(ext_data + 1) : (*ext_data & 0x0f) + 1;
-        if (ext_len == 2) {
-            e2e_ext_len = ntohs(*((uint16_t*) (ext_data + ext_hdr_len)));
-            inner_aad_len += RTP_EXT_HDR_LEN + ext_hdr_len + E2EEL_LEN + e2e_ext_len;
-            ext_data += ext_hdr_len + E2EEL_LEN + e2e_ext_len;
-            if (aad_len < inner_aad_len) {
-                debug_print(srtp_mod_double, "bad e2e_ext_len %d", e2e_ext_len);
-                return (srtp_err_status_bad_param);
-            }
-
-            debug_print(srtp_mod_double, "e2e extensions len: %d", e2e_ext_len);
-
-            /* Adjust the extension length */
-            /* XXX: Set padding bytes to zero? and cover those? */
-            ext_hdr->length = (ext_hdr_len + E2EEL_LEN + e2e_ext_len) / 4;
-            if ((ext_hdr_len + E2EEL_LEN + e2e_ext_len) % 4 > 0) {
-                ext_hdr->length += 1;
-            }
-            ext_hdr->length = htons(ext_hdr->length);
-
-            debug_print(srtp_mod_double, "new extensions len: %02x", ntohs(ext_hdr->length));
-        } else {
-            /* If there were no E2E extensions, unset the X bit */
-            hdr->x = 0;
-        }
-
-        /* Process the OHB, if present */
-        if (aad_len > inner_aad_len) {
-            ext_len = (ext_hdr_len == 2)? *(ext_data + 1) : (*ext_data & 0x0f) + 1;
-            if (ext_len == 1) {
-                ohb_r_pt = *(ext_data + ext_hdr_len);
-                if ((ohb_r_pt & 0x80) != 0) {
-                    debug_print(srtp_mod_double, "bad R bit [short] %02x", ohb_r_pt);
-                    return (srtp_err_status_bad_param);
-                }
-
-                hdr->pt = ohb_r_pt & 0x7f;
-                debug_print(srtp_mod_double, "short OHB: R=%d", ohb_r_pt >> 7);
-                debug_print(srtp_mod_double, "           PT=%d", ohb_r_pt & 0x7f);
-            } else if (ext_len == 3) {
-                ohb_r_pt = *(ext_data + ext_hdr_len);
-                ohb_seq = *((uint16_t*) (ext_data + ext_hdr_len + 1));
-                if ((ohb_r_pt & 0x80) != 0) {
-                    debug_print(srtp_mod_double, "bad R bit [long] %02x", ohb_r_pt);
-                    return (srtp_err_status_bad_param);
-                }
-
-                hdr->pt = ohb_r_pt & 0x7f;
-                hdr->seq = ohb_seq;
-                debug_print(srtp_mod_double, "long OHB: R=%d", ohb_r_pt >> 7);
-                debug_print(srtp_mod_double, "          PT=%02x", ohb_r_pt & 0x7f);
-                debug_print(srtp_mod_double, "          SEQ=%04x", ntohs(ohb_seq));
-            } else {
-                debug_print(srtp_mod_double, "bad OHB length %02x", ext_len);
-                return (srtp_err_status_bad_param);
-            }
-        }
-    }
-
-    /* Provide the proper AAD to the inner and outer contexts */
-    if (c->do_inner) {
-        debug_print(srtp_mod_double, "inner aad: %s",
-                    srtp_octet_string_hex_string(c->inner_aad, inner_aad_len));
-        err = c->inner->type->set_aad(c->inner->state, c->inner_aad, inner_aad_len);
-        if (err != srtp_err_status_ok) {
-            return err;
-        }
-    }
-
-    debug_print(srtp_mod_double, "outer aad: %s",
+    debug_print(srtp_mod_double, "caching aad: %s",
                 srtp_octet_string_hex_string(aad, aad_len));
-    return c->outer->type->set_aad(c->outer->state, aad, aad_len);
+    memcpy(c->inner_aad, aad, aad_len);
+
+    return srtp_err_status_ok;
 }
 
 /*
@@ -417,24 +356,57 @@ static srtp_err_status_t srtp_double_encrypt (void *cv, unsigned char *buf, unsi
                 srtp_octet_string_hex_string(buf, *enc_len));
 
     /*
-     * Encrypt the data with the inner transform, if applicable.  If
-     * we are not applying the inner transform, then the input is required
-     * to be a GCM-protected payload+tag.  So we need to truncate it and
-     * cache the tag.
-     *
-     * XXX: Decreasing enc_len seems likely to cause problems.
+     * Apply null OHB (strip extension and unset X)
      */
-    if (c->do_inner) {
-        err = c->inner->type->encrypt(c->inner->state, buf, enc_len);
-        if (err != srtp_err_status_ok) {
-            return err;
-        }
-    } else {
-        *enc_len -= c->inner_tag_size;
-        memcpy(c->inner_tag, buf + *enc_len, c->inner_tag_size);
+    uint32_t inner_aad_len = 0;
+    srtp_hdr_t *hdr = (srtp_hdr_t *) c->inner_aad;
+    err = apply_ohb(buf, *enc_len, hdr, &inner_aad_len);
+    if (err != srtp_err_status_ok) {
+        return err;
+    }
+
+    /*
+     * Set inner AAD
+     */
+    err = c->inner->type->set_aad(c->inner->state, c->inner_aad, inner_aad_len);
+    if (err != srtp_err_status_ok) {
+        return err;
+    }
+
+    debug_print(srtp_mod_double, "inner aad: %s",
+                srtp_octet_string_hex_string(c->inner_aad, inner_aad_len));
+
+    /*
+     * Encrypt the data with the inner transform
+     */
+    err = c->inner->type->encrypt(c->inner->state, buf, enc_len);
+    if (err != srtp_err_status_ok) {
+        return err;
     }
 
     debug_print(srtp_mod_double, "inner ciphertext: %s",
+                srtp_octet_string_hex_string(buf, *enc_len));
+
+    /*
+     * Append the inner tag
+     */
+    uint32_t tag_len = c->inner_tag_size;
+    err = c->inner->type->get_tag(c->inner->state, buf + *enc_len, &tag_len);
+    if (err != srtp_err_status_ok) {
+        return err;
+    }
+    *enc_len += tag_len;
+
+    debug_print(srtp_mod_double, "inner tag: %s",
+                srtp_octet_string_hex_string(c->inner_aad, inner_aad_len));
+
+    /*
+     * Append a null OHB
+     */
+    buf[*enc_len] = 0;
+    *enc_len += 1;
+
+    debug_print(srtp_mod_double, "outer plaintext: %s",
                 srtp_octet_string_hex_string(buf, *enc_len));
 
     err = c->outer->type->encrypt(c->outer->state, buf, enc_len);
@@ -458,47 +430,8 @@ static srtp_err_status_t srtp_double_encrypt (void *cv, unsigned char *buf, unsi
  */
 static srtp_err_status_t srtp_double_get_tag (void *cv, uint8_t *buf, uint32_t *len)
 {
-    srtp_err_status_t err;
-    uint32_t temp_len = 0;
     srtp_double_ctx_t *c = (srtp_double_ctx_t *)cv;
-
-    /*
-     * The first part of the tag is the tag from the inner transform,
-     * encrypted with the outer transform.
-     */
-    if (c->do_inner) {
-        err = c->inner->type->get_tag(c->inner->state, buf, &temp_len);
-        if (err != srtp_err_status_ok) {
-            return err;
-        }
-    } else {
-        memcpy(buf, c->inner_tag, c->inner_tag_size);
-        temp_len = c->inner_tag_size;
-    }
-
-    debug_print(srtp_mod_double, "inner tag: %s",
-                srtp_octet_string_hex_string(buf, c->inner_tag_size));
-
-    /* XXX: This assumes that encryption is size-preserving */
-    err = c->outer->type->encrypt(c->outer->state, buf, &temp_len);
-    if (err != srtp_err_status_ok) {
-        return err;
-    }
-
-    /*
-     * The second part of the tag is the tag from the outer tranform
-     */
-    err = c->outer->type->get_tag(c->outer->state, buf + c->inner_tag_size, &temp_len);
-    if (err != srtp_err_status_ok) {
-        return err;
-    }
-
-    *len = c->inner_tag_size + c->outer_tag_size;
-
-    debug_print(srtp_mod_double, "outer tag: %s",
-                srtp_octet_string_hex_string(buf, *len));
-
-    return (srtp_err_status_ok);
+    return c->outer->type->get_tag(c->outer->state, buf, len);
 }
 
 
@@ -526,16 +459,39 @@ static srtp_err_status_t srtp_double_decrypt (void *cv, unsigned char *buf, unsi
         return err;
     }
 
-    debug_print(srtp_mod_double, "inner ciphertext: %s",
+    debug_print(srtp_mod_double, "outer plaintext: %s",
                 srtp_octet_string_hex_string(buf, *enc_len));
+
+    /*
+     * Parse and apply OHB
+     *
+     * NOTE: Assumes that set_aad has already been called.
+     */
+    uint32_t inner_aad_len = 0;
+    srtp_hdr_t *hdr = (srtp_hdr_t *) c->inner_aad;
+    err = apply_ohb(buf, *enc_len, hdr, &inner_aad_len);
+    if (err != srtp_err_status_ok) {
+        return err;
+    }
+
+    /*
+     * Set inner AAD
+     */
+    err = c->inner->type->set_aad(c->inner->state, c->inner_aad, inner_aad_len);
+    if (err != srtp_err_status_ok) {
+        return err;
+    }
+
+    debug_print(srtp_mod_double, "inner aad: %s",
+                srtp_octet_string_hex_string(c->inner_aad, inner_aad_len));
+
 
     /*
      * Undo the inner transform
      */
-    if (c->do_inner) {
-        err = c->inner->type->decrypt(c->inner->state, buf, enc_len);
-    } else {
-        err = (srtp_err_status_ok);
+    err = c->inner->type->decrypt(c->inner->state, buf, enc_len);
+    if (err != srtp_err_status_ok) {
+        return err;
     }
 
     debug_print(srtp_mod_double, "plaintext: %s",
