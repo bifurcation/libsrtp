@@ -1,14 +1,6 @@
 /*
- * alloc.c
  *
- * memory allocation and deallocation
- *
- * David A. McGrew
- * Cisco Systems, Inc.
- */
-/*
- *
- * Copyright (c) 2001-2017 Cisco Systems, Inc.
+ * Copyright(c) 2001-2017 Cisco Systems, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,60 +34,48 @@
  *
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
+#ifndef CIHPER_TYPES_H
+#define CIHPER_TYPES_H
 
-#include "alloc.h"
-#include "crypto_kernel.h"
-
-/* the debug module for memory allocation */
-
-srtp_debug_module_t mod_alloc = {
-    0,      /* debugging is off by default */
-    "alloc" /* printable name for module   */
-};
+#include "cipher.h"
+#include "auth.h"
 
 /*
- * Nota bene: the debugging statements for srtp_crypto_alloc() and
- * srtp_crypto_free() have identical prefixes, which include the addresses
- * of the memory locations on which they are operating.  This fact can
- * be used to locate memory leaks, by turning on memory debugging,
- * grepping for 'alloc', then matching alloc and free calls by
- * address.
+ * cipher types that can be included in the kernel
  */
 
-#if defined(HAVE_STDLIB_H)
+const srtp_cipher_type_t srtp_null_cipher;
+const srtp_cipher_type_t srtp_aes_icm_128;
+const srtp_cipher_type_t srtp_aes_icm_256;
+#ifdef OPENSSL
+const srtp_cipher_type_t srtp_aes_icm_192;
+const srtp_cipher_type_t srtp_aes_gcm_128_openssl;
+const srtp_cipher_type_t srtp_aes_gcm_256_openssl;
+#endif
 
-void *srtp_crypto_alloc(size_t size)
-{
-    void *ptr;
+/*
+ * auth func types that can be included in the kernel
+ */
 
-    if (!size) {
-        return NULL;
-    }
+const srtp_auth_type_t srtp_null_auth;
+const srtp_auth_type_t srtp_hmac;
 
-    ptr = calloc(1, size);
+/*
+ * other generic debug modules that can be included in the kernel
+ */
 
-    if (ptr) {
-        debug_print(mod_alloc, "(location: %p) allocated", ptr);
-    } else {
-        debug_print(mod_alloc, "allocation failed (asked for %d bytes)\n",
-                    size);
-    }
+srtp_debug_module_t srtp_mod_auth;
+srtp_debug_module_t srtp_mod_cipher;
+srtp_debug_module_t mod_stat;
+srtp_debug_module_t mod_alloc;
 
-    return ptr;
-}
+/* debug modules for cipher types */
+srtp_debug_module_t srtp_mod_aes_icm;
+#ifdef OPENSSL
+srtp_debug_module_t srtp_mod_aes_gcm;
+#endif
 
-void srtp_crypto_free(void *ptr)
-{
-    debug_print(mod_alloc, "(location: %p) freed", ptr);
-
-    free(ptr);
-}
-
-#else /* we need to define our own memory allocation routines */
-
-#error no memory allocation defined yet
+/* debug modules for auth types */
+srtp_debug_module_t srtp_mod_hmac;
 
 #endif
