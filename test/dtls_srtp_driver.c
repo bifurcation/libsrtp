@@ -193,7 +193,6 @@ srtp_err_status_t test_dtls_srtp(void)
     if (err)
         return err;
     policy.ssrc.type = ssrc_any_inbound;
-    policy.ekt = NULL;
     policy.window_size = 128;
     policy.allow_repeat_tx = 0;
     policy.next = NULL;
