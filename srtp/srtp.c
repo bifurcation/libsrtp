@@ -568,8 +568,6 @@ typedef enum {
     label_rtp_header_salt = 0x07
 } srtp_prf_label;
 
-#define MAX_SRTP_KEY_LEN 256
-
 #if defined(OPENSSL) && defined(OPENSSL_KDF)
 #define MAX_SRTP_AESKEY_LEN 32
 #define MAX_SRTP_SALT_LEN 14
@@ -925,6 +923,9 @@ srtp_err_status_t srtp_stream_init_keys(srtp_stream_ctx_t *srtp,
     debug_print(mod_srtp, "base key len: %d", rtp_base_key_len);
     debug_print(mod_srtp, "kdf key len: %d", kdf_keylen);
     debug_print(mod_srtp, "rtp salt len: %d", rtp_salt_len);
+
+    session_keys->master_key_size = rtp_base_key_len + rtp_salt_len;
+    memcpy(session_keys->master_key, key, session_keys->master_key_size);
 
     /*
      * The double GCM modes use a doubled key (inner + outer) for
@@ -4988,5 +4989,23 @@ srtp_err_status_t srtp_get_stream_roc(srtp_t session,
 
     *roc = srtp_rdbx_get_roc(&stream->rtp_rdbx);
 
+    return srtp_err_status_ok;
+}
+
+srtp_err_status_t srtp_get_stream_master_key(srtp_t session,
+                                             uint32_t ssrc,
+                                             uint8_t **master_key,
+                                             uint8_t *master_key_size)
+{
+    srtp_stream_t stream;
+
+    stream = srtp_get_stream(session, htonl(ssrc));
+    if (stream == NULL) {
+        return srtp_err_status_bad_param;
+    }
+
+    /* XXX-RLB: Assumes no MKI / one master key per stream */
+    *master_key = stream->session_keys[0].master_key;
+    *master_key_size = stream->session_keys[0].master_key_size;
     return srtp_err_status_ok;
 }

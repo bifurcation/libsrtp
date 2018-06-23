@@ -35,6 +35,7 @@ runtest: test
 	$(FIND_LIBRARIES) test/roc_driver$(EXE) -v >/dev/null
 	$(FIND_LIBRARIES) test/replay_driver$(EXE) -v >/dev/null
 	$(FIND_LIBRARIES) test/dtls_srtp_driver$(EXE) >/dev/null
+	$(FIND_LIBRARIES) test/ekt_driver$(EXE) >/dev/null
 	$(FIND_LIBRARIES) cd test; $(abspath $(srcdir))/test/rtpw_test.sh -w $(abspath $(srcdir))/test/words.txt >/dev/null
 ifeq (1, $(USE_EXTERNAL_CRYPTO))
 	$(FIND_LIBRARIES) cd test; $(abspath $(srcdir))/test/rtpw_test_gcm.sh -w $(abspath $(srcdir))/test/words.txt >/dev/null
@@ -137,7 +138,7 @@ cryptobj =  $(ciphers) $(hashes) $(math) $(kernel) $(replay)
 
 srtpobj = srtp/srtp.o srtp/ekt.o
 
-libsrtp2.a: $(srtpobj) $(cryptobj) $(gdoi)
+libsrtp2.a: $(srtpobj) $(ektobj) $(cryptobj) $(gdoi)
 	$(AR) cr libsrtp2.a $^
 	$(RANLIB) libsrtp2.a
 
@@ -166,7 +167,7 @@ crypto_testapp = $(AES_CALC) crypto/test/cipher_driver$(EXE) \
 
 testapp = $(crypto_testapp) test/srtp_driver$(EXE) test/replay_driver$(EXE) \
 	  test/roc_driver$(EXE) test/rdbx_driver$(EXE) test/rtpw$(EXE) \
-	  test/dtls_srtp_driver$(EXE) test/test_srtp$(EXE)
+	  test/dtls_srtp_driver$(EXE) test/ekt_driver$(EKE) test/test_srtp$(EXE)
 
 ifeq (1, $(HAVE_PCAP))
 testapp += test/rtp_decoder$(EXE)
@@ -203,6 +204,9 @@ test/rdbx_driver$(EXE): test/rdbx_driver.c test/getopt_s.c
 	$(COMPILE) $(LDFLAGS) -o $@ $^ $(LIBS) $(SRTPLIB)
 
 test/dtls_srtp_driver$(EXE): test/dtls_srtp_driver.c test/getopt_s.c test/util.c
+	$(COMPILE) $(LDFLAGS) -o $@ $^ $(LIBS) $(SRTPLIB)
+
+test/ekt_driver$(EXE): test/ekt_driver.c
 	$(COMPILE) $(LDFLAGS) -o $@ $^ $(LIBS) $(SRTPLIB)
 
 crypto/test/cipher_driver$(EXE): crypto/test/cipher_driver.c test/getopt_s.c

@@ -65,6 +65,8 @@ extern "C" {
 #define SRTP_VER_STRING PACKAGE_STRING
 #define SRTP_VERSION PACKAGE_VERSION
 
+#define MAX_SRTP_KEY_LEN 256
+
 typedef struct srtp_stream_ctx_t_ srtp_stream_ctx_t;
 typedef srtp_stream_ctx_t *srtp_stream_t;
 
@@ -103,6 +105,20 @@ srtp_err_status_t srtp_steam_init_all_master_keys(
  */
 srtp_err_status_t srtp_stream_init(srtp_stream_t srtp, const srtp_policy_t *p);
 
+/**
+ * srtp_get_stream_master_key(s, ssrc, k, size) looks up the master
+ * key for a stream and returns a pointer to it.  It does not copy
+ * any data.
+ *
+ * returns err_status_ok on success, srtp_err_status_bad_param if there is no
+ * stream found
+ *
+ */
+srtp_err_status_t srtp_get_stream_master_key(srtp_t session,
+                                             uint32_t ssrc,
+                                             uint8_t **master_key,
+                                             uint8_t *master_key_size);
+
 /*
  * libsrtp internal datatypes
  */
@@ -118,6 +134,8 @@ typedef enum direction_t {
  * MKI ID which is used to identify the session keys.
  */
 typedef struct srtp_session_keys_t {
+    uint8_t master_key[MAX_SRTP_KEY_LEN];
+    uint8_t master_key_size;
     srtp_cipher_t *rtp_cipher;
     srtp_cipher_t *rtp_xtn_hdr_cipher;
     srtp_auth_t *rtp_auth;
