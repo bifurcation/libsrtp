@@ -494,6 +494,14 @@ srtp_err_status_t srtp_stream_clone(const srtp_stream_ctx_t *stream_template,
             memcpy(session_keys->mki_id, template_session_keys->mki_id,
                    session_keys->mki_size);
         }
+
+        /* Copy the cached master key */
+        session_keys->master_key_size = template_session_keys->master_key_size;
+        session_keys->master_salt_size = template_session_keys->master_key_size;
+        memcpy(session_keys->master_key, template_session_keys->master_key,
+               template_session_keys->master_key_size +
+               session_keys->master_salt_size);
+
         /* Copy the salt values */
         memcpy(session_keys->salt, template_session_keys->salt,
                SRTP_AEAD_SALT_LEN);
@@ -924,8 +932,13 @@ srtp_err_status_t srtp_stream_init_keys(srtp_stream_ctx_t *srtp,
     debug_print(mod_srtp, "kdf key len: %d", kdf_keylen);
     debug_print(mod_srtp, "rtp salt len: %d", rtp_salt_len);
 
-    session_keys->master_key_size = rtp_base_key_len + rtp_salt_len;
-    memcpy(session_keys->master_key, key, session_keys->master_key_size);
+    /*
+     * Cache only the secret part of the master key (not the salt)
+     */
+    session_keys->master_key_size = rtp_base_key_len;
+    session_keys->master_salt_size = rtp_salt_len;
+    memcpy(session_keys->master_key, key, session_keys->master_key_size +
+                                          session_keys->master_salt_size);
 
     /*
      * The double GCM modes use a doubled key (inner + outer) for

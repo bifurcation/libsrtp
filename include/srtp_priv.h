@@ -75,6 +75,24 @@ typedef srtp_stream_ctx_t *srtp_stream_t;
  */
 
 /*
+ * srtp_stream_dealloc(stream, template) deallocates a stream, while
+ * keeping around any resources shared with the template.
+ */
+srtp_err_status_t srtp_stream_dealloc(srtp_stream_ctx_t *stream,
+                                      const srtp_stream_ctx_t *stream_template);
+
+/*
+ * srtp_stream_clone(stream_template, new) allocates a new stream and
+ * initializes it using the cipher and auth of the stream_template
+ *
+ * the only unique data in a cloned stream is the replay database and
+ * the SSRC
+ */
+srtp_err_status_t srtp_stream_clone(const srtp_stream_ctx_t *stream_template,
+                                    uint32_t ssrc,
+                                    srtp_stream_ctx_t **str_ptr);
+
+/*
  * srtp_get_stream(ssrc) returns a pointer to the stream corresponding
  * to ssrc, or NULL if no stream exists for that ssrc
  */
@@ -136,6 +154,7 @@ typedef enum direction_t {
 typedef struct srtp_session_keys_t {
     uint8_t master_key[MAX_SRTP_KEY_LEN];
     uint8_t master_key_size;
+    uint8_t master_salt_size;
     srtp_cipher_t *rtp_cipher;
     srtp_cipher_t *rtp_xtn_hdr_cipher;
     srtp_auth_t *rtp_auth;
