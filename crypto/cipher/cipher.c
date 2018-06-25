@@ -92,6 +92,9 @@ srtp_err_status_t srtp_cipher_set_iv(srtp_cipher_t *c,
     if (!c || !c->type || !c->state) {
         return (srtp_err_status_bad_param);
     }
+    if (!((c)->type)->set_iv) {
+        return (srtp_err_status_no_such_op);
+    }
 
     return (((c)->type)->set_iv(((c)->state), iv, direction));
 }

@@ -1,6 +1,15 @@
 /*
+ * aes_wrap.h
  *
- * Copyright(c) 2001-2017 Cisco Systems, Inc.
+ * Header for AES Key Wrap Mode
+ *
+ * Richard L. Barnes
+ * Cisco Systems, Inc.
+ *
+ */
+/*
+ *
+ * Copyright (c) 2015, Cisco Systems, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,53 +43,22 @@
  *
  */
 
-#ifndef CIHPER_TYPES_H
-#define CIHPER_TYPES_H
+#ifndef AES_KW_H
+#define AES_KW_H
 
 #include "cipher.h"
-#include "auth.h"
 
-/*
- * cipher types that can be included in the kernel
- */
+#ifdef NSS
 
-extern const srtp_cipher_type_t srtp_null_cipher;
-extern const srtp_cipher_type_t srtp_aes_icm_128;
-extern const srtp_cipher_type_t srtp_aes_icm_256;
-#ifdef GCM
-extern const srtp_cipher_type_t srtp_aes_icm_192;
-extern const srtp_cipher_type_t srtp_aes_gcm_128;
-extern const srtp_cipher_type_t srtp_aes_gcm_256;
-extern const srtp_cipher_type_t srtp_aes_gcm_128_double;
-extern const srtp_cipher_type_t srtp_aes_gcm_256_double;
-extern const srtp_cipher_type_t srtp_aes_kw_128;
-extern const srtp_cipher_type_t srtp_aes_kw_256;
-#endif
+#include <pk11pub.h>
 
-/*
- * auth func types that can be included in the kernel
- */
+typedef struct {
+    int key_size;
+    PK11SlotInfo *slot;
+    PK11SymKey *key;
+} srtp_aes_kw_ctx_t;
 
-extern const srtp_auth_type_t srtp_null_auth;
-extern const srtp_auth_type_t srtp_hmac;
+#endif /* NSS */
 
-/*
- * other generic debug modules that can be included in the kernel
- */
+#endif /* AES_KW_H */
 
-extern srtp_debug_module_t srtp_mod_auth;
-extern srtp_debug_module_t srtp_mod_cipher;
-extern srtp_debug_module_t srtp_mod_stat;
-extern srtp_debug_module_t srtp_mod_alloc;
-
-/* debug modules for cipher types */
-extern srtp_debug_module_t srtp_mod_aes_icm;
-#ifdef GCM
-extern srtp_debug_module_t srtp_mod_aes_gcm;
-extern srtp_debug_module_t srtp_mod_aes_gcm_double;
-#endif
-
-/* debug modules for auth types */
-extern srtp_debug_module_t srtp_mod_hmac;
-
-#endif
