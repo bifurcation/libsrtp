@@ -294,7 +294,7 @@ elif test "$enable_nss" = "yes"; then
 
    AC_DEFINE([GCM], [1], [Define this to use AES-GCM.])
    AC_DEFINE([NSS], [1], [Define this to use NSS crypto.])
-   AES_ICM_OBJS="crypto/cipher/aes_icm_nss.o crypto/cipher/aes_gcm_nss.o crypto/cipher/aes_gcm_double.o crypto/cipher/aes_kw_nss.o"
+   AES_ICM_OBJS="crypto/cipher/aes_icm_nss.o crypto/cipher/aes_gcm_nss.o crypto/cipher/aes_kw_nss.o crypto/cipher/aes_gcm_double.o"
 
    # TODO(RLB): Use NSS for HMAC
    HMAC_OBJS="crypto/hash/hmac.o crypto/hash/sha1.o"
