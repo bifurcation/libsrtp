@@ -2073,7 +2073,6 @@ srtp_err_status_t srtp_validate_gcm_double()
     policy.ssrc.type = ssrc_specific;
     policy.ssrc.value = 0xcafebabe;
     policy.key = test_key_gcm;
-    policy.ekt = NULL;
     policy.window_size = 128;
     policy.allow_repeat_tx = 0;
     policy.next = NULL;
@@ -2229,7 +2228,6 @@ srtp_err_status_t srtp_validate_gcm_double_modified()
     policy.ssrc.type = ssrc_specific;
     policy.ssrc.value = 0xcafebabe;
     policy.key = test_key_gcm;
-    policy.ekt = NULL;
     policy.window_size = 128;
     policy.allow_repeat_tx = 0;
     policy.next = NULL;
@@ -2584,7 +2582,6 @@ srtp_err_status_t srtp_validate_encrypted_extensions_headers_gcm_double()
     policy.ssrc.type = ssrc_specific;
     policy.ssrc.value = 0xcafebabe;
     policy.key = test_key_ext_headers;
-    policy.ekt = NULL;
     policy.window_size = 128;
     policy.allow_repeat_tx = 0;
     policy.enc_xtn_hdr = headers;
@@ -3099,7 +3096,6 @@ srtp_err_status_t srtp_test_remove_stream()
     policy.ssrc.type = ssrc_specific;
     policy.ssrc.value = 0xcafebabe;
     policy.key = test_key;
-    policy.ekt = NULL;
     policy.window_size = 128;
     policy.allow_repeat_tx = 0;
     policy.next = NULL;

@@ -56,9 +56,10 @@
 
 #include <nss.h>
 
-#define AES_KW_MECHANISM CKM_NSS_AES_KEY_WRAP
-#define FAKE_MECHANISM   CKM_SHA_1_HMAC
-#define FAKE_OPERATION   CKA_SIGN
+#define AES_KW_MAX_OVERHEAD 16
+#define AES_KW_MECHANISM    CKM_NSS_AES_KEY_WRAP
+#define FAKE_MECHANISM      CKM_SHA_1_HMAC
+#define FAKE_OPERATION      CKA_SIGN
 
 
 srtp_debug_module_t srtp_mod_aes_kw = {
@@ -210,17 +211,21 @@ static srtp_err_status_t srtp_aes_kw_encrypt(void *cv,
                                               PK11_OriginUnwrap, FAKE_OPERATION,
                                               &data, NULL);
     if (!keyToWrap) {
+       printf("failed to import key: %d\n", PORT_GetError());
        return srtp_err_status_algo_fail;
     }
 
     // Encrypt and return the wrapped key
     SECStatus rv;
+    data.len += AES_KW_MAX_OVERHEAD;
     rv = PK11_WrapSymKey(AES_KW_MECHANISM, NULL, c->key, keyToWrap, &data);
     PK11_FreeSymKey(keyToWrap);
     if (rv != SECSuccess) {
+       printf("failed to wrap key: %08x\n", PORT_GetError());
         return srtp_err_status_algo_fail;
     }
 
+    *enc_len = data.len;
     return srtp_err_status_ok;
 }
 
@@ -237,7 +242,7 @@ static srtp_err_status_t srtp_aes_kw_decrypt(void *cv,
     SECItem data = {siBuffer, buf, *enc_len};
     PK11SymKey *unwrappedKey = PK11_UnwrapSymKey(c->key, AES_KW_MECHANISM, NULL,
                                                  &data, FAKE_MECHANISM, FAKE_OPERATION,
-                                                 *enc_len - 8);
+                                                 *enc_len);
     if (!unwrappedKey) {
         return srtp_err_status_algo_fail;
     }
@@ -266,7 +271,69 @@ static const char srtp_aes_kw_128_description[] =
 static const char srtp_aes_kw_256_description[] =
     "AES-256 KW";
 
-// TODO test cases
+// From RFC 3394, Section 4.3
+static const uint8_t srtp_aes_kw_128_test_case_0_key[32] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+};
+
+static const uint8_t srtp_aes_kw_128_test_case_0_plaintext[16] = {
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+    0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+};
+
+static const uint8_t srtp_aes_kw_128_test_case_0_ciphertext[24] = {
+    0x1F, 0xA6, 0x8B, 0x0A, 0x81, 0x12, 0xB4, 0x47,
+    0xAE, 0xF3, 0x4B, 0xD8, 0xFB, 0x5A, 0x7B, 0x82,
+    0x9D, 0x3E, 0x86, 0x23, 0x71, 0xD2, 0xCF, 0xE5,
+};
+
+static const srtp_cipher_test_case_t srtp_aes_kw_128_test_case_0 = {
+    SRTP_AES_128_KEY_LEN,                   /* octets in key            */
+    srtp_aes_kw_128_test_case_0_key,        /* key                      */
+    NULL,                                   /* iv                       */
+    16,                                     /* plaintext length         */
+    srtp_aes_kw_128_test_case_0_plaintext,  /* plaintext                */
+    24,                                     /* ciphertext length        */
+    srtp_aes_kw_128_test_case_0_ciphertext, /* ciphertext               */
+    0,                                      /* aad length               */
+    NULL,                                   /* aad                      */
+    0,                                      /* tag length               */
+    NULL                                    /* pointer to next testcase */
+};
+
+// From RFC 3394, Section 4.3
+static const uint8_t srtp_aes_kw_256_test_case_0_key[32] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+};
+
+static const uint8_t srtp_aes_kw_256_test_case_0_plaintext[16] = {
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+    0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+};
+
+static const uint8_t srtp_aes_kw_256_test_case_0_ciphertext[24] = {
+    0x64, 0xe8, 0xc3, 0xf9, 0xce, 0x0f, 0x5b, 0xa2,
+    0x63, 0xe9, 0x77, 0x79, 0x05, 0x81, 0x8a, 0x2a,
+    0x93, 0xc8, 0x19, 0x1e, 0x7d, 0x6e, 0x8a, 0xe7,
+};
+
+static const srtp_cipher_test_case_t srtp_aes_kw_256_test_case_0 = {
+    SRTP_AES_256_KEY_LEN,                   /* octets in key            */
+    srtp_aes_kw_256_test_case_0_key,        /* key                      */
+    NULL,                                   /* iv                       */
+    16,                                     /* plaintext length         */
+    srtp_aes_kw_256_test_case_0_plaintext,  /* plaintext                */
+    24,                                     /* ciphertext length        */
+    srtp_aes_kw_256_test_case_0_ciphertext, /* ciphertext               */
+    0,                                      /* aad length               */
+    NULL,                                   /* aad                      */
+    0,                                      /* tag length               */
+    NULL                                    /* pointer to next testcase */
+};
 
 /*
  * This is the function table for this crypto engine.
@@ -281,7 +348,7 @@ const srtp_cipher_type_t srtp_aes_kw_128 = {
     0, /* set_iv */
     0, /* get_tag */
     srtp_aes_kw_128_description,
-    NULL, /* TODO test cases */
+    &srtp_aes_kw_128_test_case_0,
     SRTP_AES_KW_128,
 };
 
@@ -295,6 +362,6 @@ const srtp_cipher_type_t srtp_aes_kw_256 = {
     0, /* set_iv */
     0, /* get_tag */
     srtp_aes_kw_256_description,
-    NULL, /* TODO test cases */
+    &srtp_aes_kw_256_test_case_0,
     SRTP_AES_KW_256,
 };
