@@ -59,12 +59,7 @@ typedef uint32_t ekt_flags_t;
 
 #define MAX_EKT_KEY_LEN 32
 
-typedef struct ekt_ctx_t {
-  ekt_cipher_t cipher;
-  ekt_spi_t spi;
-  uint8_t key[MAX_EKT_KEY_LEN];
-  size_t key_size;
-} ekt_ctx_t;
+typedef struct ekt_ctx_t_ ekt_ctx_t;
 typedef ekt_ctx_t *ekt_t;
 
 /*

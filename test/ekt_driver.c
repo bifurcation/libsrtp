@@ -68,12 +68,15 @@ srtp_err_status_t test_short_tag() {
   ekt_t ekt;
   srtp_err_status_t err = srtp_err_status_ok;
 
-  ekt_spi_t spi = 0xAA;
-  ekt_cipher_t cipher = 0xBB;
-  uint8_t key[] = {0, 1, 2, 3};
-  size_t key_size = 4;
+  ekt_spi_t spi = 0xABCD;
+  ekt_cipher_t cipher = EKT_CIPHER_AESKW_128;
+  size_t ekt_key_size = 16;
+  uint8_t ekt_key[] = {
+    0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8,
+    0xf7, 0xf6, 0xf5, 0xf4, 0xf3, 0xf2, 0xf1, 0xf0,
+  };
 
-  err = ekt_create(&ekt, spi, cipher, key, key_size);
+  err = ekt_create(&ekt, spi, cipher, ekt_key, ekt_key_size);
   if (err != srtp_err_status_ok) {
     return err;
   }
@@ -162,7 +165,7 @@ srtp_err_status_t init_test_session(srtp_t *session, uint8_t *key, srtp_ssrc_typ
  * At the end the SRTP packet should have decrypted successfully,
  * and the sender and receiver should have the same packet.
  */
-srtp_err_status_t test_long_tag() {
+srtp_err_status_t test_long_tag(ekt_cipher_t cipher, size_t ekt_key_size, uint8_t *ekt_key) {
   srtp_err_status_t err = srtp_err_status_ok;
 
   // Create the SRTP sessions
@@ -186,13 +189,7 @@ srtp_err_status_t test_long_tag() {
   ATTEMPT( init_test_session(&recv_srtp, recv_key_wsalt, ssrc_any_inbound) );
 
   // Create the EKT transforms
-  uint16_t spi = 0xABCD;
-  uint8_t cipher = EKT_CIPHER_AESKW_128;
-  size_t ekt_key_size = 16;
-  uint8_t ekt_key[] = {
-    0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8,
-    0xf7, 0xf6, 0xf5, 0xf4, 0xf3, 0xf2, 0xf1, 0xf0,
-  };
+  ekt_spi_t spi = 0xABCD;
 
   ekt_t send_ekt = NULL;
   ekt_t recv_ekt = NULL;
@@ -208,10 +205,10 @@ srtp_err_status_t test_long_tag() {
 
   // Packet lengths and known answers
   int auth_tag_size = 10;
-  int ekt_tag_size = 1 + ekt_key_size + /* encrypted SRTP key         */
-                     4 + 4 +            /* SSRC and ROC               */
-                     0 +                /* encryption overhead (TODO) */
-                     2 + 2 + 1;         /* SPI, length, tag type      */
+  int ekt_tag_size = 1 + 16 +   /* encrypted SRTP key    */
+                     4 + 4 +    /* SSRC and ROC          */
+                     15 +       /* encryption overhead   */
+                     2 + 2 + 1; /* SPI, length, tag type */
 
   // Read in the base packet
   int size_orig = base_packet_size;
@@ -229,7 +226,7 @@ srtp_err_status_t test_long_tag() {
   memcpy(pkt_ekt_add, pkt_enc, size_ekt_add);
   ATTEMPT( ekt_add_tag(send_ekt, send_srtp, pkt_ekt_add, &size_ekt_add, 0) );
 
-  uint8_t readable_tag[] = {0xAB, 0xCD, 0x00, 0x19, 0x02};
+  uint8_t readable_tag[] = {0xAB, 0xCD, 0x00, 0x28, 0x02};
   int readable_tag_size = sizeof(readable_tag);
   ASSERT( size_ekt_add == size_enc + ekt_tag_size );
   ASSERT( 0 == memcmp(pkt_ekt_add + size_ekt_add - readable_tag_size,
@@ -250,9 +247,6 @@ srtp_err_status_t test_long_tag() {
 
   ASSERT( size_dec == size_orig );
   ASSERT( 0 == memcmp(pkt_dec, pkt_orig, size_dec) );
-
-  printf("%d -> %d -> %d -> %d -> %d\n",
-         size_orig, size_enc, size_ekt_add, size_ekt_proc, size_dec);
 
 fail:
   if (send_srtp) { srtp_dealloc(send_srtp); }
@@ -280,9 +274,25 @@ int main() {
     return 1;
   }
 
-  err = test_long_tag();
+  uint8_t key_128[] = {
+    0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8,
+    0xf7, 0xf6, 0xf5, 0xf4, 0xf3, 0xf2, 0xf1, 0xf0,
+  };
+  err = test_long_tag(EKT_CIPHER_AESKW_128, 16, key_128);
   if (err != srtp_err_status_ok) {
-    fprintf(stderr, "Error in long tag test: %d\n", err);
+    fprintf(stderr, "Error in long tag / 128 test: %d\n", err);
+    return 1;
+  }
+
+  uint8_t key_256[] = {
+    0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8,
+    0xf7, 0xf6, 0xf5, 0xf4, 0xf3, 0xf2, 0xf1, 0xf0,
+    0xef, 0xee, 0xed, 0xec, 0xeb, 0xea, 0xe9, 0xe8,
+    0xe7, 0xe6, 0xe5, 0xe4, 0xe3, 0xe2, 0xe1, 0xe0,
+  };
+  err = test_long_tag(EKT_CIPHER_AESKW_256, 32, key_256);
+  if (err != srtp_err_status_ok) {
+    fprintf(stderr, "Error in long tag / 256 test: %d\n", err);
     return 1;
   }
 

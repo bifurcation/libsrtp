@@ -72,6 +72,11 @@
  * +-+-+-+-+-+-+-+-+
  */
 
+typedef struct ekt_ctx_t_ {
+  ekt_spi_t spi;
+  srtp_cipher_t *cipher;
+} ekt_ctx_t;
+
 typedef struct {
   uint32_t ssrc;
   uint32_t roc;
@@ -91,6 +96,7 @@ typedef struct {
 
 srtp_err_status_t
 ekt_create(ekt_t *ekt, ekt_spi_t spi, ekt_cipher_t cipher, uint8_t *key, size_t key_size) {
+  srtp_err_status_t err = srtp_err_status_ok;
   ekt_ctx_t *ctx;
 
   if ((ekt == NULL) || (key_size > MAX_EKT_KEY_LEN)) {
@@ -104,14 +110,41 @@ ekt_create(ekt_t *ekt, ekt_spi_t spi, ekt_cipher_t cipher, uint8_t *key, size_t 
   *ekt = ctx;
 
   ctx->spi = spi;
-  ctx->cipher = cipher;
-  ctx->key_size = key_size;
-  memcpy(ctx->key, key, key_size);
+
+  /* Map EKT cipher IDs to internal cipher types */
+  srtp_cipher_type_id_t cipher_type;
+  switch (cipher) {
+    case EKT_CIPHER_AESKW_128:
+      cipher_type = SRTP_AES_KW_128;
+      break;
+    case EKT_CIPHER_AESKW_256:
+      cipher_type = SRTP_AES_KW_128;
+      break;
+    default:
+      srtp_crypto_free(ctx);
+      return srtp_err_status_bad_param;
+  }
+
+  /* Allocate and initialize the cipher */
+  err = srtp_crypto_kernel_alloc_cipher(cipher_type, &ctx->cipher, key_size, 0);
+  if (err != srtp_err_status_ok) {
+    srtp_crypto_free(ctx);
+    return srtp_err_status_alloc_fail;
+  }
+
+  err = srtp_cipher_init(ctx->cipher, key);
+  if (err != srtp_err_status_ok) {
+    srtp_cipher_dealloc(ctx->cipher);
+    srtp_crypto_free(ctx);
+    return srtp_err_status_init_fail;
+  }
+
   return srtp_err_status_ok;
 }
 
 srtp_err_status_t
 ekt_dealloc(ekt_t ctx) {
+  srtp_cipher_dealloc(ctx->cipher);
   srtp_crypto_free(ctx);
   return srtp_err_status_ok;
 }
@@ -160,7 +193,13 @@ ekt_add_tag(ekt_t ekt, srtp_t session, uint8_t *pkt, int *pkt_size, ekt_flags_t 
   pt_trailer->roc = htonl(roc);
   tag_end += EKT_PLAINTEXT_TRAILER_SIZE;
 
-  // TODO Encrypt EKT plaintext in place, according to specified cipher
+  // Encrypt EKT plaintext in place, according to specified cipher
+  unsigned int tag_len = tag_end - tag_start;
+  err = srtp_cipher_encrypt(ekt->cipher, pkt + tag_start, &tag_len);
+  if (err != srtp_err_status_ok) {
+    return err;
+  }
+  tag_end = tag_start + tag_len;
 
   // Append tag trailer
   ekt_tag_trailer_t *tag_trailer = (ekt_tag_trailer_t*) (pkt + tag_end);
@@ -201,15 +240,20 @@ ekt_process_tag(ekt_t ekt, srtp_t session, uint8_t *pkt, int *pkt_size) {
 
   ekt_tag_trailer_t *tag_trailer = (ekt_tag_trailer_t*) (pkt + pkt_end);
   uint16_t spi = ntohs(tag_trailer->spi);
-  uint16_t len = ntohs(tag_trailer->len);
+  uint16_t ct_len = ntohs(tag_trailer->len);
 
-  if ((spi != ekt->spi) || (len > pkt_end - sizeof(srtp_hdr_t))) {
+  if ((spi != ekt->spi) || (ct_len > pkt_end - sizeof(srtp_hdr_t))) {
     // TODO-RLB: Better error status
     return srtp_err_status_bad_param;
   }
-  pkt_end -= len;
+  pkt_end -= ct_len;
 
-  // TODO: Decrypt ciphertext
+  // Decrypt EKT ciphertext in place, according to specified cipher
+  unsigned int pt_len = ct_len;
+  err = srtp_cipher_decrypt(ekt->cipher, pkt + pkt_end, &pt_len);
+  if (err != srtp_err_status_ok) {
+    return err;
+  }
 
   // Parse SSRC and ROC from plaintext
   uint8_t master_key_size = pkt[pkt_end];

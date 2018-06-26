@@ -78,6 +78,7 @@ extern srtp_debug_module_t srtp_mod_aes_icm;
 #ifdef GCM
 extern srtp_debug_module_t srtp_mod_aes_gcm;
 extern srtp_debug_module_t srtp_mod_aes_gcm_double;
+extern srtp_debug_module_t srtp_mod_aes_kw;
 #endif
 
 /* debug modules for auth types */
