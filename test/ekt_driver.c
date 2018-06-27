@@ -150,6 +150,84 @@ srtp_err_status_t init_test_session(srtp_t *session, uint8_t *key, srtp_ssrc_typ
   return srtp_create(session, &policy);
 }
 
+srtp_err_status_t test_half_tag(ekt_cipher_t cipher, size_t ekt_key_size, uint8_t *ekt_key) {
+  srtp_err_status_t err = srtp_err_status_ok;
+
+  // Create an SRTP session
+  uint8_t send_key_wsalt[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7,
+    0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+  };
+
+  srtp_t send_srtp = NULL;
+  srtp_policy_t policy;
+  memset(&policy, 0, sizeof(srtp_policy_t));
+
+  srtp_crypto_policy_set_aes_gcm_128_double(&policy.rtp);
+  srtp_crypto_policy_set_aes_gcm_128_16_auth(&policy.rtcp);
+  policy.key = send_key_wsalt;
+  policy.ssrc.type = ssrc_any_outbound;
+  policy.ssrc.value = 0;
+  policy.window_size = 1024;
+  policy.next = NULL;
+
+  ATTEMPT( srtp_create(&send_srtp, &policy) );
+
+  // Create the EKT transforms
+  ekt_spi_t spi = 0xABCD;
+  ekt_t send_ekt = NULL;
+  ekt_t recv_ekt = NULL;
+  ATTEMPT( ekt_create(&send_ekt, spi, cipher, ekt_key, ekt_key_size) );
+  ATTEMPT( ekt_create(&recv_ekt, spi, cipher, ekt_key, ekt_key_size) );
+
+  // Packet buffers
+  uint8_t pkt_orig[PACKET_BUFFER_SIZE];
+  uint8_t pkt_enc[PACKET_BUFFER_SIZE];
+  uint8_t pkt_ekt_add_half[PACKET_BUFFER_SIZE];
+  uint8_t pkt_ekt_add_full[PACKET_BUFFER_SIZE];
+
+  // Packet lengths and known answers
+  int auth_tag_size = 10;
+  int ekt_tag_size_half = 1 + 16 +   /* encrypted SRTP key    */
+                          4 + 4 +    /* SSRC and ROC          */
+                          15 +       /* encryption overhead   */
+                          2 + 2 + 1; /* SPI, length, tag type */
+  int ekt_tag_size_full = 1 + 32 +   /* encrypted SRTP key    */
+                          4 + 4 +    /* SSRC and ROC          */
+                          15 +       /* encryption overhead   */
+                          2 + 2 + 1; /* SPI, length, tag type */
+
+  // Read in the base packet
+  int size_orig = base_packet_size;
+  memcpy(pkt_orig, base_packet, size_orig);
+
+  // Encrypt base packet with sender context
+  int size_enc = base_packet_size;
+  memcpy(pkt_enc, base_packet, size_enc);
+  ATTEMPT( srtp_protect(send_srtp, pkt_enc, &size_enc) );
+  ASSERT( size_enc == size_orig + auth_tag_size );
+
+  // Add half-size EKT tag and check its size
+  int size_ekt_half = size_enc;
+  memcpy(pkt_ekt_add_half, pkt_enc, size_ekt_half);
+  ATTEMPT( ekt_add_tag(send_ekt, send_srtp, pkt_ekt_add_half, &size_ekt_half, EKT_FLAG_HALF_KEY) );
+  ASSERT( size_ekt_half == size_enc + ekt_tag_size_half );
+
+  // Add full-size EKT tag and check its size
+  int size_ekt_full = size_enc;
+  memcpy(pkt_ekt_add_full, pkt_enc, size_ekt_full);
+  ATTEMPT( ekt_add_tag(send_ekt, send_srtp, pkt_ekt_add_full, &size_ekt_full, 0) );
+  ASSERT( size_ekt_full == size_enc + ekt_tag_size_full );
+
+fail:
+  if (send_srtp) { srtp_dealloc(send_srtp); }
+  return err;
+}
+
 /*
  * This test implements the following scenario:
  *
