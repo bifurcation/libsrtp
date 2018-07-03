@@ -269,8 +269,14 @@ ekt_process_tag(ekt_t ekt, srtp_t session, uint8_t *pkt, int *pkt_size) {
   uint8_t *master_key = pkt + pkt_end + 1;
 
   ekt_plaintext_trailer_t *pt_trailer = (ekt_plaintext_trailer_t*) (master_key + master_key_size);
-  uint32_t ssrc = htonl(pt_trailer->ssrc);
-  uint32_t roc = htonl(pt_trailer->roc);
+  uint32_t ssrc = pt_trailer->ssrc;
+  uint32_t roc = ntohl(pt_trailer->roc);
+
+  // Check that the SSRC is correct for this packet
+  srtp_hdr_t *hdr = (srtp_hdr_t*) pkt;
+  if (ssrc != hdr->ssrc) {
+    return srtp_err_status_auth_fail;
+  }
 
   // Get or create a stream for this SSRC
   srtp_stream_t stream;
