@@ -42,6 +42,9 @@
  *
  */
 
+#include "config.h"
+#include "integers.h"
+
 #include "ekt.h"
 #include "srtp_priv.h"
 
@@ -72,10 +75,10 @@
  * +-+-+-+-+-+-+-+-+
  */
 
-typedef struct ekt_ctx_t_ {
+struct ekt_ctx_t_ {
   ekt_spi_t spi;
   srtp_cipher_t *cipher;
-} ekt_ctx_t;
+};
 
 typedef struct {
   uint32_t ssrc;
@@ -107,8 +110,7 @@ ekt_create(ekt_t *ekt, ekt_spi_t spi, ekt_cipher_t cipher, uint8_t *key, size_t 
   if (ctx == NULL) {
     return srtp_err_status_alloc_fail;
   }
-  *ekt = ctx;
-
+  memset(ctx, 0, sizeof(ekt_ctx_t));
   ctx->spi = spi;
 
   /* Map EKT cipher IDs to internal cipher types */
@@ -139,6 +141,7 @@ ekt_create(ekt_t *ekt, ekt_spi_t spi, ekt_cipher_t cipher, uint8_t *key, size_t 
     return srtp_err_status_init_fail;
   }
 
+  *ekt = ctx;
   return srtp_err_status_ok;
 }
 
