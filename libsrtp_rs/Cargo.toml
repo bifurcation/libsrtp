@@ -1,10 +1,11 @@
 [package]
-name = "libsrtp"
+name = "libsrtp_rs"
 version = "0.1.0"
 authors = ["Richard Barnes <rlb@ipv.sx>"]
 edition = "2018"
 
 [lib]
+crate-type = ["staticlib"]
 
 [dependencies]
 hex = "0.4.3"

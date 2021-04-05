@@ -1,5 +1,3 @@
-#![crate_type = "staticlib"]
-
 // Rust-facing interfaces
 pub mod sha1;
 

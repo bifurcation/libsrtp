@@ -44,6 +44,8 @@
  *
  */
 
+#ifndef RUST
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
@@ -470,3 +472,5 @@ void srtp_sha1_final(srtp_sha1_ctx_t *ctx, uint32_t output[5])
 
     return;
 }
+
+#endif /* ndef RUST */
