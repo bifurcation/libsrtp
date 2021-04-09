@@ -178,8 +178,12 @@ elseif(ENABLE_NSS)
 else()
   list(APPEND HASHES_SOURCES_C
     crypto/hash/hmac.c
-    crypto/hash/sha1.c
   )
+  if(NOT ENABLE_RUST)
+    list(APPEND HASHES_SOURCES_C
+      crypto/hash/sha1.c
+    )
+  endif()
 endif()
 
 set(KERNEL_SOURCES_C
