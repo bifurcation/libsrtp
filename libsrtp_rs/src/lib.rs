@@ -37,5 +37,5 @@ pub mod replay;
 pub mod sha1;
 
 // C-facing interfaces
-mod sha1_c;
-pub use sha1_c::*;
+mod c;
+pub use c::sha1::*;
