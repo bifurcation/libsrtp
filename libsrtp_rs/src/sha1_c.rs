@@ -27,9 +27,9 @@ pub extern "C" fn srtp_sha1_update(
 #[no_mangle]
 pub extern "C" fn srtp_sha1_final(ctx: *mut sha1::Context, output_ptr: *mut u32) {
     unsafe {
-        let output_slice = slice::from_raw_parts(output_ptr, 5);
-        let mut output_array = <[u32; 5]>::try_from(output_slice).unwrap();
-        (*ctx).finalize(&mut output_array);
+        let output_u8 = output_ptr as *mut u8;
+        let mut output_slice = slice::from_raw_parts_mut(output_u8, 20);
+        (*ctx).finalize(&mut output_slice);
     }
 }
 
@@ -38,17 +38,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sha1_c() {
-        // Simply verify that this runs without panicking
+    fn test_sha1_c() -> Result<(), hex::FromHexError> {
         let mut ctx = sha1::Context::new();
         let ctx_ptr: *mut sha1::Context = &mut ctx;
 
-        let msg: [u8; 4] = [1, 2, 3, 4];
+        let msg: [u8; 4] = [0x9f, 0xc3, 0xfe, 0x08];
         let msg_len: c_int = 4;
-        let mut output: [u32; 5] = [0; 5];
+        let mut actual_output_u32: [u32; 5] = [0; 5];
+        let expected_output = hex::decode("16a0ff84fcc156fd5d3ca3a744f20a232d172253")?;
 
         srtp_sha1_init(ctx_ptr);
         srtp_sha1_update(ctx_ptr, msg.as_ptr(), msg_len);
-        srtp_sha1_final(ctx_ptr, output.as_mut_ptr());
+        srtp_sha1_final(ctx_ptr, actual_output_u32.as_mut_ptr());
+
+        let actual_output: &[u8; 20] = unsafe { std::mem::transmute(&actual_output_u32) };
+        assert_eq!(expected_output, actual_output);
+
+        Ok(())
     }
 }

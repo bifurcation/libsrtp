@@ -1,4 +1,5 @@
 use std::convert::TryFrom;
+use std::os::raw::c_int;
 
 fn s1(x: u32) -> u32 {
     x.rotate_left(1)
@@ -31,19 +32,13 @@ const K1: u32 = 0x6ED9EBA1; // Kt for 20 <= t <= 39
 const K2: u32 = 0x8F1BBCDC; // Kt for 40 <= t <= 59
 const K3: u32 = 0xCA62C1D6; // Kt for 60 <= t <= 79
 
-fn as_u32_be(slice: &[u8]) -> u32 {
-    let array = <[u8; 4]>::try_from(slice).unwrap();
-    ((array[0] as u32) << 24)
-        + ((array[1] as u32) << 16)
-        + ((array[2] as u32) << 8)
-        + ((array[3] as u32) << 0)
-}
-
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct Context {
-    h: [u32; 5],             // state vector
-    m: [u8; 64],             // message buffer
-    octets_in_buffer: usize, // octets of message in buffer
-    num_bits_in_msg: usize,  // total number of bits in message
+    pub h: [u32; 5],             // state vector
+    pub m: [u8; 64],             // message buffer
+    pub octets_in_buffer: c_int, // octets of message in buffer
+    pub num_bits_in_msg: u32,    // total number of bits in message
 }
 
 impl Context {
@@ -56,28 +51,32 @@ impl Context {
         }
     }
 
+    fn octets_in_buffer_usize(&self) -> usize {
+        usize::try_from(self.octets_in_buffer).unwrap()
+    }
+
     fn fill_buffer(&mut self, msg: &[u8]) -> usize {
-        let remaining = self.m.len() - self.octets_in_buffer;
+        let octets_in_buffer = self.octets_in_buffer_usize();
+        let remaining = self.m.len() - octets_in_buffer;
         let to_read = if msg.len() < remaining {
             msg.len()
         } else {
             remaining
         };
 
-        let start = self.octets_in_buffer;
+        let start = octets_in_buffer;
         let end = start + to_read;
         self.m[start..end].clone_from_slice(&msg[..to_read]);
-        self.octets_in_buffer += to_read;
-        self.num_bits_in_msg += 8 * to_read;
+        self.octets_in_buffer += c_int::try_from(to_read).unwrap();
+        self.num_bits_in_msg += u32::try_from(8 * to_read).unwrap();
         to_read
     }
 
     fn core(&mut self) {
-        print!("m: {}\n", hex::encode(self.m));
-
         let mut w: [u32; 80] = [0; 80];
         for i in 0..16 {
-            w[i] = as_u32_be(&self.m[(4 * i)..(4 * (i + 1))]);
+            let array = <[u8; 4]>::try_from(&self.m[(4 * i)..(4 * (i + 1))]).unwrap();
+            w[i] = u32::from_be_bytes(array);
         }
         for i in 16..80 {
             w[i] = s1(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]);
@@ -149,12 +148,10 @@ impl Context {
     }
 
     pub fn update(&mut self, msg: &[u8]) {
-        print!("update: {}\n", hex::encode(msg));
-
         let mut start: usize = 0;
         while start < msg.len() {
             let read = self.fill_buffer(&msg[start..]);
-            if self.octets_in_buffer == self.m.len() {
+            if self.octets_in_buffer_usize() == self.m.len() {
                 self.core();
             }
 
@@ -162,7 +159,7 @@ impl Context {
         }
     }
 
-    pub fn finalize(&mut self, output: &mut [u32; 5]) {
+    pub fn finalize(&mut self, output: &mut [u8]) {
         // Write a final one bit
         let final_msg_bits = self.num_bits_in_msg;
         self.update(&[0x80u8]);
@@ -179,28 +176,26 @@ impl Context {
         self.core();
 
         // Copy the cached hash value to the output
-        output.copy_from_slice(&self.h);
+        output[0..4].copy_from_slice(&self.h[0].to_be_bytes());
+        output[4..8].copy_from_slice(&self.h[1].to_be_bytes());
+        output[8..12].copy_from_slice(&self.h[2].to_be_bytes());
+        output[12..16].copy_from_slice(&self.h[3].to_be_bytes());
+        output[16..20].copy_from_slice(&self.h[4].to_be_bytes());
+
+        self.reset();
+    }
+
+    pub fn reset(&mut self) {
+        self.h = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
+        self.m = [0; 64];
         self.octets_in_buffer = 0;
+        self.num_bits_in_msg = 0;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn to_u8_be(x: u32) -> [u8; 4] {
-        [(x >> 24) as u8, (x >> 16) as u8, (x >> 8) as u8, x as u8]
-    }
-
-    fn to_be(b32: &[u32; 5]) -> [u8; 20] {
-        let mut out: [u8; 20] = [0; 20];
-        out[0..4].clone_from_slice(&to_u8_be(b32[0]));
-        out[4..8].clone_from_slice(&to_u8_be(b32[1]));
-        out[8..12].clone_from_slice(&to_u8_be(b32[2]));
-        out[12..16].clone_from_slice(&to_u8_be(b32[3]));
-        out[16..20].clone_from_slice(&to_u8_be(b32[4]));
-        out
-    }
 
     #[test]
     fn test_sha1() -> Result<(), hex::FromHexError> {
@@ -472,18 +467,19 @@ mod tests {
             },
         ];
 
-        let mut output_buf: [u32; 5] = [0; 5];
+        let mut actual_output: [u8; 20] = [0; 20];
         for tc in &test_cases {
             let input = hex::decode(tc.input)?;
             let expected_output = hex::decode(tc.output)?;
 
             let mut ctx = Context::new();
             ctx.update(&input);
-            ctx.finalize(&mut output_buf);
+            ctx.finalize(&mut actual_output);
 
-            let actual_output = to_be(&output_buf);
+            println!("{} ?= {}", hex::encode(actual_output), tc.output);
             assert_eq!(expected_output, actual_output);
         }
+
         Ok(())
     }
 }
