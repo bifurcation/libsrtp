@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::srtp::Error;
 
 struct Bitmask {
     storage: u128,
