@@ -199,10 +199,14 @@ set(MATH_SOURCES_C
 )
 
 set(REPLAY_SOURCES_C
-  crypto/replay/rdb.c
   crypto/replay/rdbx.c
   crypto/replay/ut_sim.c
 )
+if(NOT ENABLE_RUST)
+  list(APPEND REPLAY_SOURCES_C
+    crypto/replay/rdb.c
+  )
+endif()
 
 set(SOURCES_H
   crypto/include/aes.h

@@ -46,12 +46,12 @@ impl ReplayDB {
 
         // if the index appears before the window, its bad
         if index < self.window_start {
-            return Err(Error::replay_old);
+            return Err(Error::ReplayOld);
         }
 
         // otherwise, the index appears within the window, so check the bitmask
         if self.bitmask.get(index - self.window_start) {
-            return Err(Error::replay_fail);
+            return Err(Error::ReplayFail);
         }
 
         // otherwise, the index is okay
@@ -60,7 +60,7 @@ impl ReplayDB {
 
     pub fn add(&mut self, index: u32) -> Result<(), Error> {
         if index < self.window_start {
-            return Err(Error::replay_fail);
+            return Err(Error::ReplayFail);
         }
 
         let delta = index - self.window_start;
@@ -80,14 +80,114 @@ impl ReplayDB {
 
     pub fn increment(&mut self) -> Result<(), Error> {
         if self.window_start >= 0x7fffffff {
-            return Err(Error::key_expired);
+            return Err(Error::KeyExpired);
         }
 
         self.window_start += 1;
         return Ok(());
     }
+
+    pub fn get_value(&self) -> u32 {
+        self.window_start
+    }
 }
 
 // TODO(RLB) ExtendedReplayDB
-// TODO(RLB) ReplayDB test
-// TODO(RLB) ExtendedReplayDB test
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ut_sim::UnreliableTransport;
+    use rand::{thread_rng, Rng};
+
+    const NUM_TRIALS: u32 = 1 << 16;
+
+    fn rdb_check_add(rdb: &mut ReplayDB, i: u32) {
+        match rdb.check(i) {
+            Ok(_) => {}
+            Err(_) => panic!("Expected success"),
+        }
+
+        rdb.add(i).unwrap()
+    }
+
+    fn rdb_check_add_unordered(rdb: &mut ReplayDB, i: u32) {
+        match rdb.check(i) {
+            Ok(_) => {}
+            Err(Error::ReplayOld) => return,
+            Err(_) => panic!("Unexpected error type"),
+        }
+
+        rdb.add(i).unwrap()
+    }
+
+    fn rdb_check_expect_failure(rdb: &mut ReplayDB, i: u32) {
+        match rdb.check(i) {
+            Ok(_) => panic!("Expected failure"),
+            Err(Error::ReplayOld) => {}
+            Err(Error::ReplayFail) => {}
+            Err(_) => panic!("Unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn test_sequential_insertion() {
+        let mut rdb = ReplayDB::new();
+        for i in 0..NUM_TRIALS {
+            rdb_check_add(&mut rdb, i);
+            rdb_check_expect_failure(&mut rdb, i);
+        }
+    }
+
+    #[test]
+    fn test_non_sequential_insertion() {
+        let mut rdb = ReplayDB::new();
+        let mut ut = UnreliableTransport::new();
+        for _ in 0..NUM_TRIALS {
+            let ircvd = ut.next();
+            rdb_check_add_unordered(&mut rdb, ircvd);
+            rdb_check_expect_failure(&mut rdb, ircvd);
+        }
+    }
+
+    #[test]
+    fn test_large_gaps() {
+        let mut rdb = ReplayDB::new();
+        let gap_bound: u32 = 10;
+
+        let mut ircvd: u32 = 0;
+        let mut rng = thread_rng();
+        for _ in 0..NUM_TRIALS {
+            ircvd += rng.gen_range(0..gap_bound);
+            rdb_check_add(&mut rdb, ircvd);
+            rdb_check_expect_failure(&mut rdb, ircvd);
+        }
+    }
+
+    #[test]
+    fn test_large_offset() {
+        let mut rdb = ReplayDB::new();
+        for i in 0..NUM_TRIALS {
+            rdb_check_add(&mut rdb, i + 513);
+            rdb_check_expect_failure(&mut rdb, 513);
+        }
+    }
+
+    #[test]
+    fn test_key_expired() {
+        let mut rdb = ReplayDB::new();
+
+        rdb.window_start = 0x7ffffffe;
+        rdb.increment().unwrap();
+        assert_eq!(rdb.get_value(), 0x7fffffff);
+
+        match rdb.increment() {
+            Err(Error::KeyExpired) => {}
+            _ => panic!("Allowed use of expired key"),
+        }
+        assert_eq!(rdb.get_value(), 0x7fffffff);
+    }
+
+    // TODO(RLB) ReplayDB benchmarking
+    // TODO(RLB) ExtendedReplayDB test
+}

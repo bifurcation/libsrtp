@@ -13,3 +13,4 @@ debug = true
 
 [dev-dependencies]
 hex = "0.4.3"
+rand = "0.8.3"
