@@ -20,6 +20,11 @@ impl Bitmask {
     }
 
     fn shift(&mut self, bits: u32) {
+        if bits >= Bitmask::BITS {
+          self.storage = 0;
+          return;
+        }
+
         self.storage >>= bits;
     }
 }
@@ -70,11 +75,11 @@ impl ReplayDB {
             return Ok(());
         }
 
-        // shift the window forward by delta bits
-        let delta = delta - Bitmask::BITS - 1;
-        self.bitmask.shift(delta);
+        // shift the window to fit the index
+        let new_window_start = index - Bitmask::BITS + 1;
+        self.bitmask.shift(new_window_start - self.window_start);
         self.bitmask.set(Bitmask::BITS - 1);
-        self.window_start += delta;
+        self.window_start = new_window_start;
         return Ok(());
     }
 
@@ -97,7 +102,7 @@ impl ReplayDB {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ut_sim::UnreliableTransport;
+    use rand::seq::SliceRandom;
     use rand::{thread_rng, Rng};
 
     const NUM_TRIALS: u32 = 1 << 16;
@@ -115,7 +120,7 @@ mod tests {
         match rdb.check(i) {
             Ok(_) => {}
             Err(Error::ReplayOld) => return,
-            Err(_) => panic!("Unexpected error type"),
+            Err(err) => panic!("Unexpected error {:?}", err),
         }
 
         rdb.add(i).unwrap()
@@ -142,11 +147,19 @@ mod tests {
     #[test]
     fn test_non_sequential_insertion() {
         let mut rdb = ReplayDB::new();
-        let mut ut = UnreliableTransport::new();
-        for _ in 0..NUM_TRIALS {
-            let ircvd = ut.next();
-            rdb_check_add_unordered(&mut rdb, ircvd);
-            rdb_check_expect_failure(&mut rdb, ircvd);
+
+        const trials: usize = NUM_TRIALS as usize;
+        let mut range: [u32; trials] = [0; trials];
+        for i in 0..NUM_TRIALS {
+          range[i as usize] = i;
+        }
+
+        let mut rng = rand::thread_rng();
+        range.shuffle(&mut rng);
+
+        for ircvd in range.iter() {
+            rdb_check_add_unordered(&mut rdb, *ircvd);
+            rdb_check_expect_failure(&mut rdb, *ircvd);
         }
     }
 
@@ -158,7 +171,7 @@ mod tests {
         let mut ircvd: u32 = 0;
         let mut rng = thread_rng();
         for _ in 0..NUM_TRIALS {
-            ircvd += rng.gen_range(0..gap_bound);
+            ircvd += rng.gen_range(1..gap_bound);
             rdb_check_add(&mut rdb, ircvd);
             rdb_check_expect_failure(&mut rdb, ircvd);
         }
