@@ -98,15 +98,14 @@ impl ReplayDB {
     }
 }
 
-type SequenceNumber = u16;
-type RolloverCounter = u32;
+pub type SequenceNumber = u16;
+pub type RolloverCounter = u32;
+pub type ExtendedSequenceNumber = u64;
 
 const SEQ_NUM_MEDIAN: i32 = 1 << 15;
 const SEQ_NUM_MAX: i32 = 1 << 16;
 
-type ExtendedSequenceNumber = u64;
-
-trait ExtSeqNum {
+pub trait ExtSeqNum {
     fn from_roc_seq(roc: RolloverCounter, seq: SequenceNumber) -> Self;
     fn roc(&self) -> RolloverCounter;
     fn seq(&self) -> SequenceNumber;
@@ -171,9 +170,10 @@ impl ExtSeqNum for ExtendedSequenceNumber {
     }
 }
 
-pub struct BitVector {
-    pub bit_length: usize,
-    pub words: Box<[u64]>,
+#[repr(C)]
+struct BitVector {
+    bit_length: usize,
+    words: Box<[u64]>,
 }
 
 impl BitVector {
@@ -194,6 +194,7 @@ impl BitVector {
         };
         let word_size: usize = (window_bytes / Self::BYTES_PER_WORD) + extra_word;
 
+        println!("allocating {} words", word_size);
         Ok(Self {
             bit_length: window_bits,
             words: vec![0u64; word_size].into_boxed_slice(),
@@ -244,6 +245,7 @@ impl BitVector {
     }
 }
 
+#[repr(C)]
 pub struct ExtendedReplayDB {
     index: ExtendedSequenceNumber,
     bitmask: BitVector,
@@ -492,7 +494,7 @@ mod rdbx_tests {
 
         // Don't repeat sequence numbers on this pure random test
         const NUM_TRIALS: usize = 1 << 16;
-        
+
         let mut range: [SequenceNumber; NUM_TRIALS] = [0; NUM_TRIALS];
         for i in 0..NUM_TRIALS {
             range[i] = i as SequenceNumber;

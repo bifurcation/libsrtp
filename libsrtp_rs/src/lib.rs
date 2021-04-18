@@ -5,4 +5,3 @@ pub mod srtp;
 
 // C-facing interfaces
 mod c;
-pub use c::sha1::*;

@@ -329,6 +329,7 @@ static inline uint64_t be64_to_cpu(uint64_t v)
 typedef struct {
     uint32_t length;
     uint32_t *word;
+    uint32_t *extra_space_for_rust_box;
 } bitvector_t;
 
 #define _bitvector_get_bit(v, bit_index)                                       \

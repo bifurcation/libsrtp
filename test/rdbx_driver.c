@@ -267,8 +267,9 @@ srtp_err_status_t test_replay_dbx(int num_trials, unsigned long ws)
     /* re-initialize */
     srtp_rdbx_dealloc(&rdbx);
 
-    if (srtp_rdbx_init(&rdbx, ws) != srtp_err_status_ok) {
-        printf("replay_init failed\n");
+    status = srtp_rdbx_init(&rdbx, ws);
+    if (status) {
+        printf("replay_init failed with error code %d\n", status);
         return srtp_err_status_init_fail;
     }
 
@@ -295,8 +296,9 @@ srtp_err_status_t test_replay_dbx(int num_trials, unsigned long ws)
     /* re-initialize */
     srtp_rdbx_dealloc(&rdbx);
 
-    if (srtp_rdbx_init(&rdbx, ws) != srtp_err_status_ok) {
-        printf("replay_init failed\n");
+    status = srtp_rdbx_init(&rdbx, ws);
+    if (status) {
+        printf("replay_init failed with error code %d\n", status);
         return srtp_err_status_init_fail;
     }
 
