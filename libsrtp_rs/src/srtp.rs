@@ -4,13 +4,13 @@ pub enum Error {
     Ok = 0, // included for backward compatibility
 
     // TODO(RLB): During translation, we are promoting this as needed, to make sure we only end up with the set we need
+    Fail = 1,       // unspecified failure
     BadParam = 2,   // unsupported parameter
     ReplayFail = 9, // replay check failed (bad index)
     ReplayOld = 10, // replay check failed (index too old)
     KeyExpired = 15, // can't use key any more
 
                     /*
-                    fail = 1,           // unspecified failure
                     alloc_fail = 3,     // couldn't allocate memory
                     dealloc_fail = 4,   // couldn't deallocate properly
                     init_fail = 5,      // couldn't initialize

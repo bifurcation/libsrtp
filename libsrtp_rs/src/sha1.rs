@@ -32,6 +32,8 @@ const K1: u32 = 0x6ED9EBA1; // Kt for 20 <= t <= 39
 const K2: u32 = 0x8F1BBCDC; // Kt for 40 <= t <= 59
 const K3: u32 = 0xCA62C1D6; // Kt for 60 <= t <= 79
 
+pub const OUTPUT_BYTES: usize = 20;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Context {
