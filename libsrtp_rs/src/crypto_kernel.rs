@@ -5,7 +5,7 @@ use std::collections::HashMap;
 // Cipher
 //
 #[repr(u32)]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum CipherTypeID {
     Null = 0,
     AesIcm128 = 1,
@@ -28,7 +28,7 @@ pub trait CipherType {
 // Auth
 //
 #[repr(u32)]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum AuthTypeID {
     Null = 0,
     HmacSha1 = 3,
@@ -106,7 +106,7 @@ mod test {
     #[test]
     fn test_load_hmac() -> Result<(), Error> {
         let mut kernel = CryptoKernel::new();
-        kernel.load_auth_type(1, Box::new(hmac::NativeHMAC {}))?;
+        kernel.load_auth_type(Box::new(hmac::NativeHMAC {}))?;
         Ok(())
     }
 }

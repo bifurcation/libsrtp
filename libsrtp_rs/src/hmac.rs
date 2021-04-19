@@ -80,8 +80,10 @@ mod tests {
         ];
         let mut actual_tag: [u8; 20] = [0; 20];
 
-        // Instantiate
-        let mut auth = NativeHMAC {}.create(key.len(), actual_tag.len())?;
+        // Instantiate and check ID
+        let auth_type = NativeHMAC {};
+        let mut auth = auth_type.create(key.len(), actual_tag.len())?;
+        assert_eq!(auth_type.id(), AuthTypeID::HmacSha1);
 
         // One step
         auth.init(&key)?;
