@@ -1,4 +1,5 @@
 // Rust-facing interfaces
+pub mod aes;
 pub mod crypto_kernel;
 pub mod hmac;
 pub mod replay;
