@@ -1232,7 +1232,10 @@ impl EncryptionKey {
         }
     }
 
-    pub fn encrypt(&self, pt: &mut V128) {
+    pub fn encrypt(&self, pt_ext: &mut [u8]) {
+        let mut pt = V128::zero();
+        unsafe { pt.v8.copy_from_slice(&pt_ext[0..16]) };
+
         pt.xor_eq(&self.round[0]);
 
         pt.aes_round(&self.round[1]);
@@ -1256,5 +1259,49 @@ impl EncryptionKey {
                 pt.aes_final_round(&self.round[14]);
             }
         }
+
+        unsafe { pt_ext[0..16].copy_from_slice(&pt.v8) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aes() -> Result<(), hex::FromHexError> {
+        struct TestCase {
+            key: &'static str,
+            pt: &'static str,
+            ct: &'static str,
+        }
+
+        let test_cases: [TestCase; 2] = [
+            TestCase {
+                key: "000102030405060708090a0b0c0d0e0f",
+                pt: "00112233445566778899aabbccddeeff",
+                ct: "69c4e0d86a7b0430d8cdb78070b4c55a",
+            },
+            TestCase {
+                key: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+                pt: "00112233445566778899aabbccddeeff",
+                ct: "8ea2b7ca516745bfeafc49904b496089",
+            },
+        ];
+
+        let mut actual_ct: [u8; 16] = [0; 16];
+        for tc in &test_cases {
+            let key = hex::decode(tc.key)?;
+            let pt = hex::decode(tc.pt)?;
+            let expected_ct = hex::decode(tc.ct)?;
+
+            let enc = EncryptionKey::new(&key).unwrap();
+
+            actual_ct.copy_from_slice(pt.as_slice());
+            enc.encrypt(&mut actual_ct);
+            assert_eq!(expected_ct, actual_ct);
+        }
+
+        Ok(())
     }
 }
