@@ -6,19 +6,19 @@ pub enum Error {
     // TODO(RLB): During translation, we are promoting this as needed, to make sure we only end up with the set we need
     Fail = 1,       // unspecified failure
     BadParam = 2,   // unsupported parameter
+    Terminus = 6,   // can't process as much data as requested
+    CipherFail = 8, // cipher failure
     ReplayFail = 9, // replay check failed (bad index)
     ReplayOld = 10, // replay check failed (index too old)
+    NoSuchOp = 12,  // unsupported operation
     KeyExpired = 15, // can't use key any more
 
                     /*
                     alloc_fail = 3,     // couldn't allocate memory
                     dealloc_fail = 4,   // couldn't deallocate properly
                     init_fail = 5,      // couldn't initialize
-                    terminus = 6,       // can't process as much data as requested
                     auth_fail = 7,      // authentication failure
-                    cipher_fail = 8,    // cipher failure
                     algo_fail = 11,     // algorithm failed test routine
-                    no_such_op = 12,    // unsupported operation
                     no_ctx = 13,        // no appropriate context found
                     cant_check = 14,    // unable to perform desired validation
                     socket_err = 16,    // error in use of socket

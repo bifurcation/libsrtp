@@ -1,5 +1,6 @@
 // Rust-facing interfaces
 pub mod aes;
+pub mod aes_icm;
 pub mod crypto_kernel;
 pub mod hmac;
 pub mod null_auth;
