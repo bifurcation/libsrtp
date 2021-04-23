@@ -5,6 +5,7 @@ pub mod crypto_kernel;
 pub mod crypto_test;
 pub mod hmac;
 pub mod null_auth;
+pub mod null_cipher;
 pub mod replay;
 pub mod sha1;
 pub mod srtp;

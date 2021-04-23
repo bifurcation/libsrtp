@@ -47,7 +47,7 @@ mod tests {
     use crate::crypto_test;
 
     #[test]
-    fn test_null() -> Result<(), Error> {
+    fn test_null_auth() -> Result<(), Error> {
         let auth_type = NullAuth {};
         assert_eq!(auth_type.id(), AuthTypeID::Null);
 

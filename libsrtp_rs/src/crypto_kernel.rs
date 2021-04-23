@@ -126,12 +126,14 @@ mod test {
     use crate::aes_icm::{KeySize, NativeAesIcm};
     use crate::hmac::NativeHMAC;
     use crate::null_auth::NullAuth;
+    use crate::null_cipher::NullCipher;
 
     #[test]
     fn test_load_native_types() -> Result<(), Error> {
         let mut kernel = CryptoKernel::new();
 
         // Cipher types
+        kernel.load_cipher_type(Box::new(NullCipher {}))?;
         kernel.load_cipher_type(Box::new(NativeAesIcm::new(KeySize::Aes128)))?;
         kernel.load_cipher_type(Box::new(NativeAesIcm::new(KeySize::Aes256)))?;
 
