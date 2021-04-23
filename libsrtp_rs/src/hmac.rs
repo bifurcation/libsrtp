@@ -69,32 +69,16 @@ impl AuthType for NativeHMAC {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto_test;
 
     #[test]
-    fn test_hmac() -> Result<(), Error> {
-        let key: [u8; 20] = [0x0b; 20];
-        let data: [u8; 8] = [0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65]; // "Hi There"
-        let expected_tag: [u8; 20] = [
-            0xb6, 0x17, 0x31, 0x86, 0x55, 0x05, 0x72, 0x64, 0xe2, 0x8b, 0xc0, 0xb6, 0xfb, 0x37,
-            0x8c, 0x8e, 0xf1, 0x46, 0xbe, 0x00,
-        ];
-        let mut actual_tag: [u8; 20] = [0; 20];
-
-        // Instantiate and check ID
+    fn test_null() -> Result<(), Error> {
         let auth_type = NativeHMAC {};
-        let mut auth = auth_type.create(key.len(), actual_tag.len())?;
         assert_eq!(auth_type.id(), AuthTypeID::HmacSha1);
 
-        // One step
-        auth.init(&key)?;
-        auth.compute(&data, &mut actual_tag)?;
-        assert_eq!(expected_tag, actual_tag);
+        let tests_passed = crypto_test::auth(&auth_type)?;
+        assert!(tests_passed > 0);
 
-        // Two step
-        auth.init(&key)?;
-        auth.update(&data)?;
-        auth.compute(&[], &mut actual_tag)?;
-        assert_eq!(expected_tag, actual_tag);
         Ok(())
     }
 }

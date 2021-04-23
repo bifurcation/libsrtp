@@ -2,6 +2,7 @@
 pub mod aes;
 pub mod aes_icm;
 pub mod crypto_kernel;
+pub mod crypto_test;
 pub mod hmac;
 pub mod null_auth;
 pub mod replay;

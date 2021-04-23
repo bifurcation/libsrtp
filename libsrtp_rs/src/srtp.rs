@@ -10,6 +10,7 @@ pub enum Error {
     CipherFail = 8, // cipher failure
     ReplayFail = 9, // replay check failed (bad index)
     ReplayOld = 10, // replay check failed (index too old)
+    AlgoFail = 11,  // algorithm failed test routine
     NoSuchOp = 12,  // unsupported operation
     KeyExpired = 15, // can't use key any more
 
@@ -18,7 +19,6 @@ pub enum Error {
                     dealloc_fail = 4,   // couldn't deallocate properly
                     init_fail = 5,      // couldn't initialize
                     auth_fail = 7,      // authentication failure
-                    algo_fail = 11,     // algorithm failed test routine
                     no_ctx = 13,        // no appropriate context found
                     cant_check = 14,    // unable to perform desired validation
                     socket_err = 16,    // error in use of socket

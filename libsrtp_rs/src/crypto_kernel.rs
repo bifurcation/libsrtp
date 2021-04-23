@@ -1,3 +1,4 @@
+use crate::crypto_test;
 use crate::srtp::Error;
 use std::collections::HashMap;
 
@@ -5,7 +6,7 @@ use std::collections::HashMap;
 // Cipher
 //
 #[repr(u32)]
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum CipherTypeID {
     Null = 0,
     AesIcm128 = 1,
@@ -15,6 +16,17 @@ pub enum CipherTypeID {
     AesGcm256 = 7,
 }
 
+pub const fn is_aead(id: CipherTypeID) -> bool {
+    match id {
+        CipherTypeID::Null => false,
+        CipherTypeID::AesIcm128 => false,
+        CipherTypeID::AesIcm192 => false,
+        CipherTypeID::AesIcm256 => false,
+        CipherTypeID::AesGcm128 => true,
+        CipherTypeID::AesGcm256 => true,
+    }
+}
+
 pub enum CipherDirection {
     Encrypt,
     Decrypt,
@@ -22,7 +34,6 @@ pub enum CipherDirection {
 }
 
 pub trait Cipher {
-    // TODO methods from srtp_cipher_type_t
     fn init(&mut self, key: &[u8]) -> Result<(), Error>;
     fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error>;
     fn set_iv(&mut self, iv: &[u8], direction: CipherDirection) -> Result<(), Error>;
@@ -39,7 +50,7 @@ pub trait CipherType {
 // Auth
 //
 #[repr(u32)]
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum AuthTypeID {
     Null = 0,
     HmacSha1 = 3,
@@ -79,7 +90,7 @@ impl CryptoKernel {
     }
 
     pub fn load_auth_type(&mut self, at: Box<dyn AuthType>) -> Result<(), Error> {
-        // TODO run self-test
+        crypto_test::auth(at.as_ref())?;
         self.auth_types.insert(at.id(), at);
         Ok(())
     }

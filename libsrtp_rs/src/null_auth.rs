@@ -44,29 +44,16 @@ impl AuthType for NativeNull {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto_test;
 
     #[test]
     fn test_null() -> Result<(), Error> {
-        let key: [u8; 0] = [];
-        let data: [u8; 8] = [0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65]; // "Hi There"
-        let expected_tag: [u8; 0] = [];
-        let mut actual_tag: [u8; 0] = [];
-
-        // Instantiate and check ID
         let auth_type = NativeNull {};
-        let mut auth = auth_type.create(key.len(), actual_tag.len())?;
         assert_eq!(auth_type.id(), AuthTypeID::Null);
 
-        // One step
-        auth.init(&key)?;
-        auth.compute(&data, &mut actual_tag)?;
-        assert_eq!(actual_tag, expected_tag);
+        let tests_passed = crypto_test::auth(&auth_type)?;
+        assert!(tests_passed > 0);
 
-        // Two step
-        auth.init(&key)?;
-        auth.update(&data)?;
-        auth.compute(&[], &mut actual_tag)?;
-        assert_eq!(actual_tag, expected_tag);
         Ok(())
     }
 }
