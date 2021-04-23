@@ -3,6 +3,20 @@ use crate::srtp::Error;
 use std::collections::HashMap;
 
 //
+// Constants
+//
+pub mod constants {
+    pub const SALT_LEN: usize = 14;
+    pub const AEAD_SALT_LEN: usize = 12;
+
+    pub const AES_128_KEY_LEN: usize = 16;
+    pub const AES_256_KEY_LEN: usize = 32;
+
+    pub const AES_ICM_128_KEY_LEN_WSALT: usize = SALT_LEN + AES_128_KEY_LEN;
+    pub const AES_ICM_256_KEY_LEN_WSALT: usize = SALT_LEN + AES_256_KEY_LEN;
+}
+
+//
 // Cipher
 //
 #[repr(u32)]
@@ -123,7 +137,8 @@ impl CryptoKernel {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::aes_icm::{KeySize, NativeAesIcm};
+    use crate::aes::KeySize;
+    use crate::aes_icm::NativeAesIcm;
     use crate::hmac::NativeHMAC;
     use crate::null_auth::NullAuth;
     use crate::null_cipher::NullCipher;

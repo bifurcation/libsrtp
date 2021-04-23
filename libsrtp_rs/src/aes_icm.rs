@@ -1,43 +1,7 @@
 use crate::aes;
+use crate::crypto_kernel::constants;
 use crate::crypto_kernel::{Cipher, CipherDirection, CipherType, CipherTypeID};
 use crate::srtp::Error;
-
-// integer counter mode works as follows:
-//
-// 16 bits
-// <----->
-// +------+------+------+------+------+------+------+------+
-// |           nonce           |    packet index    |  ctr |---+
-// +------+------+------+------+------+------+------+------+   |
-//                                                             |
-// +------+------+------+------+------+------+------+------+   v
-// |                      salt                      |000000|->(+)
-// +------+------+------+------+------+------+------+------+   |
-//                                                             |
-//                                                        +---------+
-//							  | encrypt |
-//							  +---------+
-//							       |
-// +------+------+------+------+------+------+------+------+   |
-// |                    keystream block                    |<--+
-// +------+------+------+------+------+------+------+------+
-//
-// All fields are big-endian
-//
-// ctr is the block counter, which increments from zero for
-// each packet (16 bits wide)
-//
-// packet index is distinct for each packet (48 bits wide)
-//
-// nonce can be distinct across many uses of the same key, or
-// can be a fixed value per key, or can be per-packet randomness
-// (64 bits)
-
-#[derive(Debug, Clone, Copy)]
-pub enum KeySize {
-    Aes128 = 16,
-    Aes256 = 32,
-}
 
 fn xor_eq(a: &mut [u8], b: &[u8]) {
     for (b1, b2) in a.iter_mut().zip(b.iter()) {
@@ -56,7 +20,7 @@ struct Context {
 }
 
 impl Context {
-    fn new(key_size: KeySize) -> Self {
+    fn new(key_size: aes::KeySize) -> Self {
         Context {
             counter: 0,
             salt_block: [0; 16],
@@ -65,8 +29,8 @@ impl Context {
             expanded_key: None,
             bytes_in_buffer: 0,
             key_size: match key_size {
-                KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
-                KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,
+                aes::KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
+                aes::KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,
             },
         }
     }
@@ -169,11 +133,11 @@ impl Cipher for Context {
 }
 
 pub struct NativeAesIcm {
-    key_size: KeySize,
+    key_size: aes::KeySize,
 }
 
 impl NativeAesIcm {
-    pub fn new(key_size: KeySize) -> Self {
+    pub fn new(key_size: aes::KeySize) -> Self {
         NativeAesIcm { key_size: key_size }
     }
 }
@@ -181,15 +145,15 @@ impl NativeAesIcm {
 impl CipherType for NativeAesIcm {
     fn id(&self) -> CipherTypeID {
         match self.key_size {
-            KeySize::Aes128 => CipherTypeID::AesIcm128,
-            KeySize::Aes256 => CipherTypeID::AesIcm256,
+            aes::KeySize::Aes128 => CipherTypeID::AesIcm128,
+            aes::KeySize::Aes256 => CipherTypeID::AesIcm256,
         }
     }
 
     fn create(&self, key_len: usize, tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
         let correct_key_len = match self.key_size {
-            KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
-            KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,
+            aes::KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
+            aes::KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,
         };
         if key_len != correct_key_len || tag_len != 0 {
             return Err(Error::BadParam);
@@ -199,17 +163,6 @@ impl CipherType for NativeAesIcm {
     }
 }
 
-mod constants {
-    pub const SALT_LEN: usize = 14;
-    pub const AEAD_SALT_LEN: usize = 12;
-
-    pub const AES_128_KEY_LEN: usize = 16;
-    pub const AES_256_KEY_LEN: usize = 32;
-
-    pub const AES_ICM_128_KEY_LEN_WSALT: usize = SALT_LEN + AES_128_KEY_LEN;
-    pub const AES_ICM_256_KEY_LEN_WSALT: usize = SALT_LEN + AES_256_KEY_LEN;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_128() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(KeySize::Aes128);
+        let cipher_type = NativeAesIcm::new(aes::KeySize::Aes128);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm128);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;
@@ -228,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_256() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(KeySize::Aes256);
+        let cipher_type = NativeAesIcm::new(aes::KeySize::Aes256);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm256);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;

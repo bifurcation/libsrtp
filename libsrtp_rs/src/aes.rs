@@ -1146,6 +1146,12 @@ impl V128 {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum KeySize {
+    Aes128 = 16,
+    Aes256 = 32,
+}
+
 enum RoundCount {
     Aes128 = 10,
     Aes256 = 14,
