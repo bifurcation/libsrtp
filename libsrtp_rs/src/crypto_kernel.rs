@@ -15,8 +15,19 @@ pub enum CipherTypeID {
     AesGcm256 = 7,
 }
 
+pub enum CipherDirection {
+    Encrypt,
+    Decrypt,
+    Any,
+}
+
 pub trait Cipher {
     // TODO methods from srtp_cipher_type_t
+    fn init(&mut self, key: &[u8]) -> Result<(), Error>;
+    fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error>;
+    fn set_iv(&mut self, iv: &[u8], direction: CipherDirection) -> Result<(), Error>;
+    fn encrypt(&mut self, buf: &mut [u8], pt_size: &mut usize) -> Result<(), Error>;
+    fn get_tag(&mut self, _tag: &mut [u8]) -> Result<(), Error>;
 }
 
 pub trait CipherType {
