@@ -1,9 +1,9 @@
 use crate::crypto_kernel::{Auth, AuthType, AuthTypeID};
 use crate::srtp::Error;
 
-struct Null;
+struct Context;
 
-impl Auth for Null {
+impl Auth for Context {
     fn init(&mut self, key: &[u8]) -> Result<(), Error> {
         if key.len() > 0 {
             Err(Error::BadParam)
@@ -25,9 +25,9 @@ impl Auth for Null {
     }
 }
 
-pub struct NativeNull;
+pub struct NullAuth;
 
-impl AuthType for NativeNull {
+impl AuthType for NullAuth {
     fn id(&self) -> AuthTypeID {
         AuthTypeID::Null
     }
@@ -37,7 +37,7 @@ impl AuthType for NativeNull {
             return Err(Error::BadParam);
         }
 
-        Ok(Box::new(Null {}))
+        Ok(Box::new(Context {}))
     }
 }
 
@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn test_null() -> Result<(), Error> {
-        let auth_type = NativeNull {};
+        let auth_type = NullAuth {};
         assert_eq!(auth_type.id(), AuthTypeID::Null);
 
         let tests_passed = crypto_test::auth(&auth_type)?;

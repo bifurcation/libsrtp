@@ -84,7 +84,7 @@ impl CryptoKernel {
     }
 
     pub fn load_cipher_type(&mut self, ct: Box<dyn CipherType>) -> Result<(), Error> {
-        // TODO run self-test
+        crypto_test::cipher(ct.as_ref())?;
         self.cipher_types.insert(ct.id(), ct);
         Ok(())
     }
@@ -123,12 +123,22 @@ impl CryptoKernel {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::hmac;
+    use crate::aes_icm::{KeySize, NativeAesIcm};
+    use crate::hmac::NativeHMAC;
+    use crate::null_auth::NullAuth;
 
     #[test]
-    fn test_load_hmac() -> Result<(), Error> {
+    fn test_load_native_types() -> Result<(), Error> {
         let mut kernel = CryptoKernel::new();
-        kernel.load_auth_type(Box::new(hmac::NativeHMAC {}))?;
+
+        // Cipher types
+        kernel.load_cipher_type(Box::new(NativeAesIcm::new(KeySize::Aes128)))?;
+        kernel.load_cipher_type(Box::new(NativeAesIcm::new(KeySize::Aes256)))?;
+
+        // Auth types
+        kernel.load_auth_type(Box::new(NullAuth {}))?;
+        kernel.load_auth_type(Box::new(NativeHMAC {}))?;
+
         Ok(())
     }
 }

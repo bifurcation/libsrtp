@@ -173,7 +173,7 @@ pub struct NativeAesIcm {
 }
 
 impl NativeAesIcm {
-    fn new(key_size: KeySize) -> Self {
+    pub fn new(key_size: KeySize) -> Self {
         NativeAesIcm { key_size: key_size }
     }
 }
@@ -213,90 +213,26 @@ mod constants {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto_test;
 
     #[test]
     fn test_aes_icm_128() -> Result<(), Error> {
-        let key: [u8; 30] = [
-            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
-            0x4f, 0x3c, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb,
-            0xfc, 0xfd,
-        ];
-        let nonce: [u8; 16] = [0; 16];
-        let plaintext: [u8; 32] = [0; 32];
-        let ciphertext: [u8; 32] = [
-            0xe0, 0x3e, 0xad, 0x09, 0x35, 0xc9, 0x5e, 0x80, 0xe1, 0x66, 0xb1, 0x6d, 0xd9, 0x2b,
-            0x4e, 0xb4, 0xd2, 0x35, 0x13, 0x16, 0x2b, 0x02, 0xd0, 0xf7, 0x2a, 0x43, 0xa2, 0xfe,
-            0x4a, 0x5f, 0x97, 0xab,
-        ];
-
-        // Instantiate and check ID
         let cipher_type = NativeAesIcm::new(KeySize::Aes128);
-        let mut cipher = cipher_type.create(key.len(), 0)?;
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm128);
 
-        // Encrypt
-        cipher.init(&key)?;
-        cipher.set_iv(&nonce, CipherDirection::Encrypt)?;
-
-        let mut encrypt_buffer = plaintext;
-        let mut encrypt_len = plaintext.len();
-        cipher.encrypt(&mut encrypt_buffer, &mut encrypt_len)?;
-        assert_eq!(encrypt_len, ciphertext.len());
-        assert_eq!(encrypt_buffer, ciphertext);
-
-        // Decrypt
-        cipher.init(&key)?;
-        cipher.set_iv(&nonce, CipherDirection::Decrypt)?;
-
-        let mut decrypt_buffer = ciphertext;
-        let mut decrypt_len = ciphertext.len();
-        cipher.encrypt(&mut decrypt_buffer, &mut decrypt_len)?;
-        assert_eq!(decrypt_len, plaintext.len());
-        assert_eq!(decrypt_buffer, plaintext);
+        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        assert!(tests_passed > 0);
 
         Ok(())
     }
 
     #[test]
     fn test_aes_icm_256() -> Result<(), Error> {
-        let key: [u8; 46] = [
-            0x57, 0xf8, 0x2f, 0xe3, 0x61, 0x3f, 0xd1, 0x70, 0xa8, 0x5e, 0xc9, 0x3c, 0x40, 0xb1,
-            0xf0, 0x92, 0x2e, 0xc4, 0xcb, 0x0d, 0xc0, 0x25, 0xb5, 0x82, 0x72, 0x14, 0x7c, 0xc4,
-            0x38, 0x94, 0x4a, 0x98, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9,
-            0xfa, 0xfb, 0xfc, 0xfd,
-        ];
-        let nonce: [u8; 16] = [0; 16];
-        let plaintext: [u8; 32] = [0; 32];
-        let ciphertext: [u8; 32] = [
-            0x92, 0xbd, 0xd2, 0x8a, 0x93, 0xc3, 0xf5, 0x25, 0x11, 0xc6, 0x77, 0xd0, 0x8b, 0x55,
-            0x15, 0xa4, 0x9d, 0xa7, 0x1b, 0x23, 0x78, 0xa8, 0x54, 0xf6, 0x70, 0x50, 0x75, 0x6d,
-            0xed, 0x16, 0x5b, 0xac,
-        ];
-
-        // Instantiate and check ID
         let cipher_type = NativeAesIcm::new(KeySize::Aes256);
-        let mut cipher = cipher_type.create(key.len(), 0)?;
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm256);
 
-        // Encrypt
-        cipher.init(&key)?;
-        cipher.set_iv(&nonce, CipherDirection::Encrypt)?;
-
-        let mut encrypt_buffer = plaintext;
-        let mut encrypt_len = plaintext.len();
-        cipher.encrypt(&mut encrypt_buffer, &mut encrypt_len)?;
-        assert_eq!(encrypt_len, ciphertext.len());
-        assert_eq!(encrypt_buffer, ciphertext);
-
-        // Decrypt
-        cipher.init(&key)?;
-        cipher.set_iv(&nonce, CipherDirection::Decrypt)?;
-
-        let mut decrypt_buffer = ciphertext;
-        let mut decrypt_len = ciphertext.len();
-        cipher.encrypt(&mut decrypt_buffer, &mut decrypt_len)?;
-        assert_eq!(decrypt_len, plaintext.len());
-        assert_eq!(decrypt_buffer, plaintext);
+        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        assert!(tests_passed > 0);
 
         Ok(())
     }

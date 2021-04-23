@@ -72,7 +72,7 @@ mod tests {
     use crate::crypto_test;
 
     #[test]
-    fn test_null() -> Result<(), Error> {
+    fn test_hmac() -> Result<(), Error> {
         let auth_type = NativeHMAC {};
         assert_eq!(auth_type.id(), AuthTypeID::HmacSha1);
 
