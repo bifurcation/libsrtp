@@ -190,8 +190,12 @@ set(KERNEL_SOURCES_C
   crypto/kernel/alloc.c
   crypto/kernel/crypto_kernel.c
   crypto/kernel/err.c
-  crypto/kernel/key.c
 )
+if(NOT ENABLE_RUST)
+  list(APPEND KERNEL_SOURCES_C
+    crypto/kernel/key.c
+  )
+endif()
 
 set(MATH_SOURCES_C
   crypto/math/datatypes.c
