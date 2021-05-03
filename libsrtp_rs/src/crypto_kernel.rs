@@ -1,6 +1,8 @@
 use crate::crypto_test;
 use crate::srtp::Error;
+use num_enum::TryFromPrimitive; // only for C interface
 use std::collections::HashMap;
+use std::convert::TryFrom; // only for C interface
 
 //
 // Constants
@@ -41,18 +43,23 @@ pub const fn is_aead(id: CipherTypeID) -> bool {
     }
 }
 
+#[repr(u32)] // only for C interface
+#[derive(Copy, Clone, TryFromPrimitive)] // only for C interface
 pub enum CipherDirection {
-    Encrypt,
-    Decrypt,
-    Any,
+    Encrypt = 0,
+    Decrypt = 1,
+    Any = 2,
 }
 
 pub trait Cipher {
+    fn key_size(&self) -> usize;
+    fn iv_size(&self) -> usize;
     fn init(&mut self, key: &[u8]) -> Result<(), Error>;
     fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error>;
     fn set_iv(&mut self, iv: &[u8], direction: CipherDirection) -> Result<(), Error>;
-    fn encrypt(&mut self, buf: &mut [u8], pt_size: &mut usize) -> Result<(), Error>;
-    fn get_tag(&mut self, _tag: &mut [u8]) -> Result<(), Error>;
+    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
+    fn decrypt(&mut self, buf: &mut [u8], ct_size: usize) -> Result<usize, Error>;
+    fn get_tag(&mut self, tag: &mut [u8]) -> Result<usize, Error>;
 }
 
 pub trait CipherType {

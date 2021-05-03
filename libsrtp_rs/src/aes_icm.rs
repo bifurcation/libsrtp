@@ -47,6 +47,14 @@ impl Context {
 }
 
 impl Cipher for Context {
+    fn key_size(&self) -> usize {
+        self.key_size
+    }
+
+    fn iv_size(&self) -> usize {
+        self.counter_block.len()
+    }
+
     fn init(&mut self, key: &[u8]) -> Result<(), Error> {
         if key.len() != self.key_size {
             return Err(Error::BadParam);
@@ -86,23 +94,26 @@ impl Cipher for Context {
         Ok(())
     }
 
-    fn encrypt(&mut self, buf: &mut [u8], pt_size: &mut usize) -> Result<(), Error> {
+    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+        if pt_size > buf.len() {
+            return Err(Error::BadParam);
+        }
+
         if self.expanded_key.is_none() {
             return Err(Error::CipherFail);
         }
 
-        let bytes_to_encrypt: usize = *pt_size;
-        if bytes_to_encrypt > 0xffff - (self.counter as usize) {
+        if pt_size > 0xffff - (self.counter as usize) {
             return Err(Error::Terminus);
         }
 
         // Special case for small buffers
-        if bytes_to_encrypt <= self.bytes_in_buffer {
+        if pt_size <= self.bytes_in_buffer {
             let key_start = 16 - self.bytes_in_buffer;
-            let key_end = key_start + bytes_to_encrypt;
+            let key_end = key_start + pt_size;
             xor_eq(buf, &self.buffer[key_start..key_end]);
-            self.bytes_in_buffer -= bytes_to_encrypt;
-            return Ok(());
+            self.bytes_in_buffer -= pt_size;
+            return Ok(pt_size);
         }
 
         let key_start = 16 - self.bytes_in_buffer;
@@ -110,7 +121,7 @@ impl Cipher for Context {
 
         let mut buf_start = self.bytes_in_buffer;
         let mut buf_end = buf_start + 16;
-        while buf_start + 16 <= bytes_to_encrypt {
+        while buf_start + 16 <= pt_size {
             self.advance();
             xor_eq(&mut buf[buf_start..buf_end], &self.buffer);
 
@@ -118,16 +129,20 @@ impl Cipher for Context {
             buf_end = buf_start + 16;
         }
 
-        if buf_start < bytes_to_encrypt {
-            let tail_size = bytes_to_encrypt - buf_start;
+        if buf_start < pt_size {
+            let tail_size = pt_size - buf_start;
             xor_eq(&mut buf[buf_start..], &self.buffer[..tail_size]);
             self.bytes_in_buffer -= tail_size;
         }
 
-        Ok(())
+        Ok(pt_size)
     }
 
-    fn get_tag(&mut self, _tag: &mut [u8]) -> Result<(), Error> {
+    fn decrypt(&mut self, buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
+        self.encrypt(buf, ct_size)
+    }
+
+    fn get_tag(&mut self, _tag: &mut [u8]) -> Result<usize, Error> {
         Err(Error::NoSuchOp)
     }
 }

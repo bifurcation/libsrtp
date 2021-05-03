@@ -22,14 +22,15 @@ impl CipherTest {
         cipher.init(&self.key)?;
         cipher.set_iv(&self.nonce, CipherDirection::Encrypt)?;
 
-        let mut encrypt_buffer = vec![0u8; self.ciphertext.len()];
+        let mut encrypt_vec = vec![0u8; self.ciphertext.len()];
+        let encrypt_buffer = encrypt_vec.as_mut_slice();
         encrypt_buffer.copy_from_slice(self.plaintext);
         let mut encrypt_len = self.plaintext.len();
-        cipher.encrypt(encrypt_buffer.as_mut_slice(), &mut encrypt_len)?;
+        let encrypt_len = cipher.encrypt(encrypt_buffer, encrypt_buffer.len())?;
         if encrypt_len != self.ciphertext.len() {
             return Err(Error::AlgoFail);
         }
-        if encrypt_buffer.as_slice() != self.ciphertext {
+        if encrypt_buffer != self.ciphertext {
             return Err(Error::AlgoFail);
         }
 
@@ -37,14 +38,14 @@ impl CipherTest {
         cipher.init(&self.key)?;
         cipher.set_iv(&self.nonce, CipherDirection::Decrypt)?;
 
-        let mut decrypt_buffer = vec![0u8; self.ciphertext.len()];
+        let mut decrypt_vec = vec![0u8; self.ciphertext.len()];
+        let decrypt_buffer = decrypt_vec.as_mut_slice();
         decrypt_buffer.copy_from_slice(self.ciphertext);
-        let mut decrypt_len = self.ciphertext.len();
-        cipher.encrypt(decrypt_buffer.as_mut_slice(), &mut decrypt_len)?;
+        let decrypt_len = cipher.decrypt(decrypt_buffer, decrypt_buffer.len())?;
         if decrypt_len != self.plaintext.len() {
             return Err(Error::AlgoFail);
         }
-        if decrypt_buffer.as_slice() != self.plaintext {
+        if decrypt_buffer != self.plaintext {
             return Err(Error::AlgoFail);
         }
 
