@@ -1152,6 +1152,7 @@ pub enum KeySize {
     Aes256 = 32,
 }
 
+#[repr(C)]
 enum RoundCount {
     Aes128 = 10,
     Aes256 = 14,

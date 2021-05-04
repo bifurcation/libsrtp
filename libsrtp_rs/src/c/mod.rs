@@ -1,3 +1,4 @@
+pub mod aes;
 pub mod alloc;
 pub mod cipher;
 pub mod key_limit;

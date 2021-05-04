@@ -406,13 +406,11 @@ srtp_err_status_t cipher_driver_test_buffering(srtp_cipher_t *c)
         /* compare buffers */
         for (j = 0; j < (int)buflen; j++) {
             if (buffer0[j] != buffer1[j]) {
-#if PRINT_DEBUG
                 printf("test case %d failed at byte %d\n", i, j);
                 printf("computed: %s\n",
-                       octet_string_hex_string(buffer1, buflen));
+                       srtp_octet_string_hex_string(buffer1, buflen));
                 printf("expected: %s\n",
-                       octet_string_hex_string(buffer0, buflen));
-#endif
+                       srtp_octet_string_hex_string(buffer0, buflen));
                 return srtp_err_status_algo_fail;
             }
         }

@@ -153,7 +153,7 @@ elseif(ENABLE_NSS)
     crypto/cipher/aes_icm_nss.c
     crypto/cipher/aes_gcm_nss.c
   )
-else()
+elseif(NOT ENABLE_RUST)
   list(APPEND CIPHERS_SOURCES_C
     crypto/cipher/aes.c
     crypto/cipher/aes_icm.c
