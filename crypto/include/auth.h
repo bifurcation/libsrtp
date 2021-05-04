@@ -79,21 +79,21 @@ typedef srtp_err_status_t (*srtp_auth_update_func)(void *state,
 typedef srtp_err_status_t (*srtp_auth_start_func)(void *state);
 
 /* some syntactic sugar on these function types */
-#define srtp_auth_type_alloc(at, a, klen, outlen)                              \
-    ((at)->alloc((a), (klen), (outlen)))
+srtp_err_status_t srtp_auth_type_alloc(const struct srtp_auth_type_t* at,
+                                       srtp_auth_pointer_t *ap,
+                                       int key_len,
+                                       int out_len);
+srtp_err_status_t srtp_auth_dealloc(struct srtp_auth_t *a);
+srtp_err_status_t srtp_auth_init(struct srtp_auth_t *a, const uint8_t *key);
+srtp_err_status_t srtp_auth_start(struct srtp_auth_t *a);
+srtp_err_status_t srtp_auth_update(struct srtp_auth_t *a,
+                                   const uint8_t *buffer,
+                                   int octets_to_auth);
+srtp_err_status_t srtp_auth_compute(struct srtp_auth_t *a,
+                                    const uint8_t *buffer,
+                                    int octets_to_auth,
+                                    uint8_t *tag);
 
-#define srtp_auth_init(a, key)                                                 \
-    (((a)->type)->init((a)->state, (key), ((a)->key_len)))
-
-#define srtp_auth_compute(a, buf, len, res)                                    \
-    (((a)->type)->compute((a)->state, (buf), (len), (a)->out_len, (res)))
-
-#define srtp_auth_update(a, buf, len)                                          \
-    (((a)->type)->update((a)->state, (buf), (len)))
-
-#define srtp_auth_start(a) (((a)->type)->start((a)->state))
-
-#define srtp_auth_dealloc(c) (((c)->type)->dealloc(c))
 
 /* functions to get information about a particular auth_t */
 int srtp_auth_get_key_length(const struct srtp_auth_t *a);

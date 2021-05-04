@@ -58,6 +58,68 @@ srtp_debug_module_t srtp_mod_auth = {
     "auth func" /* printable name for module   */
 };
 
+srtp_err_status_t srtp_auth_type_alloc(const srtp_auth_type_t* at,
+                                       srtp_auth_pointer_t *ap,
+                                       int key_len,
+                                       int out_len)
+{
+  if (!at || !at->alloc) {
+    return srtp_err_status_bad_param;
+  }
+
+  return at->alloc(ap, key_len, out_len);
+}
+
+srtp_err_status_t srtp_auth_dealloc(srtp_auth_t *a)
+{
+  if (!a || !a->type) {
+    return srtp_err_status_bad_param;
+  }
+
+  return a->type->dealloc(a);
+}
+
+srtp_err_status_t srtp_auth_init(srtp_auth_t *a, const uint8_t *key)
+{
+  if (!a || !a->type) {
+    return srtp_err_status_bad_param;
+  }
+
+  return a->type->init(a->state, key, a->key_len);
+}
+
+srtp_err_status_t srtp_auth_start(srtp_auth_t *a)
+{
+  if (!a || !a->type) {
+    return srtp_err_status_bad_param;
+  }
+
+  return a->type->start(a->state);
+}
+
+srtp_err_status_t srtp_auth_update(srtp_auth_t *a,
+                                   const uint8_t *buffer,
+                                   int octets_to_auth)
+{
+  if (!a || !a->type) {
+    return srtp_err_status_bad_param;
+  }
+
+  return a->type->update(a->state, buffer, octets_to_auth);
+}
+
+srtp_err_status_t srtp_auth_compute(srtp_auth_t *a,
+                                   const uint8_t *buffer,
+                                   int octets_to_auth,
+                                   uint8_t *tag)
+{
+  if (!a || !a->type) {
+    return srtp_err_status_bad_param;
+  }
+
+  return a->type->compute(a->state, buffer, octets_to_auth, a->out_len, tag);
+}
+
 int srtp_auth_get_key_length(const srtp_auth_t *a)
 {
     return a->key_len;
