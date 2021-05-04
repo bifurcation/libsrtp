@@ -3,22 +3,29 @@ use crate::sha1;
 use crate::srtp::Error;
 
 struct HMAC {
+    ipad: [u8; 64],
     opad: [u8; 64],
     ctx: sha1::Context,
 }
 
 impl Auth for HMAC {
     fn init(&mut self, key: &[u8]) -> Result<(), Error> {
-        let mut ipad: [u8; 64] = [0x36; 64];
-        self.opad = [0x5c; 64];
+        self.ipad.fill(0x36);
+        self.opad.fill(0x5c);
 
         for i in 0..key.len() {
-            ipad[i] ^= key[i];
+            self.ipad[i] ^= key[i];
             self.opad[i] ^= key[i];
         }
 
         self.ctx.reset();
-        self.ctx.update(&ipad);
+        self.ctx.update(&self.ipad);
+        Ok(())
+    }
+
+    fn start(&mut self) -> Result<(), Error> {
+        self.ctx.reset();
+        self.ctx.update(&self.ipad);
         Ok(())
     }
 
@@ -60,6 +67,7 @@ impl AuthType for NativeHMAC {
         }
 
         Ok(Box::new(HMAC {
+            ipad: [0; 64],
             opad: [0; 64],
             ctx: sha1::Context::new(),
         }))

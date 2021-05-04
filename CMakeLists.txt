@@ -163,8 +163,12 @@ set(HASHES_SOURCES_C
   crypto/hash/auth.c
   crypto/hash/auth_test_cases.c
   crypto/hash/auth_test_cases.h
-  crypto/hash/null_auth.c
 )
+if(NOT ENABLE_RUST)
+  list(APPEND CIPHERS_SOURCES_C
+    crypto/hash/null_auth.c
+  )
+endif()
 
 if(ENABLE_OPENSSL)
   list(APPEND HASHES_SOURCES_C
@@ -178,15 +182,11 @@ elseif(ENABLE_NSS)
   list(APPEND HASHES_SOURCES_C
     crypto/hash/hmac_nss.c
   )
-else()
+elseif(NOT ENABLE_RUST)
   list(APPEND HASHES_SOURCES_C
+    crypto/hash/sha1.c
     crypto/hash/hmac.c
   )
-  if(NOT ENABLE_RUST)
-    list(APPEND HASHES_SOURCES_C
-      crypto/hash/sha1.c
-    )
-  endif()
 endif()
 
 set(KERNEL_SOURCES_C

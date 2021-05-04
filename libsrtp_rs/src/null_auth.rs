@@ -12,6 +12,10 @@ impl Auth for Context {
         }
     }
 
+    fn start(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+
     fn update(&mut self, _update: &[u8]) -> Result<(), Error> {
         Ok(())
     }

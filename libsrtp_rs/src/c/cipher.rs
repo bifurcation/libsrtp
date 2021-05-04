@@ -6,6 +6,7 @@
 use crate::aes;
 use crate::aes_icm::NativeAesIcm;
 use crate::c::err::srtp_debug_module_t;
+use crate::c::{just_error, zero_and_drop};
 use crate::crypto_kernel::{Cipher, CipherDirection, CipherType, CipherTypeID};
 use crate::null_cipher::NullCipher;
 use crate::srtp::Error;
@@ -99,12 +100,20 @@ pub struct srtp_cipher_type_t {
 unsafe impl Sync for srtp_cipher_type_t {}
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct srtp_cipher_t {
     pub type_: *const srtp_cipher_type_t,
     pub state: *mut Box<dyn Cipher>,
     pub key_len: c_int,
     pub algorithm: c_int,
+}
+
+impl Drop for srtp_cipher_t {
+    fn drop(&mut self) {
+        // Take ownership of the Box<dyn Cipher> so that it gets dropped
+        let _ = unsafe { self.state.read() };
+        self.state = std::ptr::null_mut();
+    }
 }
 
 //
@@ -122,26 +131,6 @@ pub static srtp_mod_cipher: srtp_debug_module_t = srtp_debug_module_t {
 //
 // Utility functions
 //
-extern "C" fn zero_and_drop<T>(p: *mut T) -> Error {
-    unsafe {
-        let mut zero = std::mem::MaybeUninit::<T>::zeroed();
-        std::ptr::swap(p, zero.as_mut_ptr());
-
-        // Since `zero` now holds the contents of `p`, which is presumed valid, we tell the
-        // compiler to assume it's initialized.  As a result, resources owned by `p` will get
-        // cleaned up when `zero` is dropped.
-        zero.assume_init();
-    }
-
-    Error::Ok
-}
-
-fn just_error(result: Result<(), Error>) -> Error {
-    match result {
-        Ok(_) => Error::Ok,
-        Err(err) => err,
-    }
-}
 
 fn cipher_alloc(
     cipher_type: &dyn CipherType,
@@ -342,6 +331,14 @@ pub static srtp_aes_icm_128: srtp_cipher_type_t = srtp_cipher_type_t {
     description: srtp_aes_icm_128_description.as_ptr(),
     test_data: &srtp_aes_icm_128_test_case,
     id: CipherTypeID::AesIcm128 as srtp_cipher_type_id_t,
+};
+
+static srtp_mod_aes_icm_name: &CStr = cstr!("aes icm");
+
+#[no_mangle]
+pub static srtp_mod_aes_icm: srtp_debug_module_t = srtp_debug_module_t {
+    on: 0,
+    name: srtp_mod_aes_icm_name.as_ptr(),
 };
 
 //
