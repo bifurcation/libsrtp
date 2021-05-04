@@ -1,5 +1,5 @@
 #[repr(i32)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     Ok = 0, // included for backward compatibility
 

@@ -48,7 +48,7 @@ impl CipherType for NullCipher {
         CipherTypeID::Null
     }
 
-    fn create(&self, key_len: usize, tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
+    fn create(&self, _key_len: usize, _tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
         // XXX(RLB) It seems like we should do this check, but it is incompatible with SRTP tests.
         /*
         if key_len > 0 || tag_len > 0 {

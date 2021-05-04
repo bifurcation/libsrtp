@@ -25,7 +25,6 @@ impl CipherTest {
         let mut encrypt_vec = vec![0u8; self.ciphertext.len()];
         let encrypt_buffer = encrypt_vec.as_mut_slice();
         encrypt_buffer.copy_from_slice(self.plaintext);
-        let mut encrypt_len = self.plaintext.len();
         let encrypt_len = cipher.encrypt(encrypt_buffer, encrypt_buffer.len())?;
         if encrypt_len != self.ciphertext.len() {
             return Err(Error::AlgoFail);

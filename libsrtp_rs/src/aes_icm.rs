@@ -172,7 +172,7 @@ impl CipherType for NativeAesIcm {
         }
     }
 
-    fn create(&self, key_len: usize, tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
+    fn create(&self, key_len: usize, _tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
         let correct_key_len = match self.key_size {
             aes::KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
             aes::KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,

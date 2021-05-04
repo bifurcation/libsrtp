@@ -127,14 +127,13 @@ set(SOURCES_C
   srtp/srtp.c
 )
 
-set(CIPHERS_SOURCES_C
-  crypto/cipher/cipher.c
-  crypto/cipher/cipher_test_cases.c
-  crypto/cipher/cipher_test_cases.h
-)
+set(CIPHERS_SOURCES_C)
 if(NOT ENABLE_RUST)
   list(APPEND CIPHERS_SOURCES_C
-    crypto/kernel/null_cipher.c
+    crypto/cipher/null_cipher.c
+    crypto/cipher/cipher.c
+    crypto/cipher/cipher_test_cases.c
+    crypto/cipher/cipher_test_cases.h
   )
 endif()
 

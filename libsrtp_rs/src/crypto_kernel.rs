@@ -1,8 +1,7 @@
 use crate::crypto_test;
 use crate::srtp::Error;
-use num_enum::TryFromPrimitive; // only for C interface
+use num_enum::{IntoPrimitive, TryFromPrimitive}; // only for C interface
 use std::collections::HashMap;
-use std::convert::TryFrom; // only for C interface
 
 //
 // Constants
@@ -44,7 +43,7 @@ pub const fn is_aead(id: CipherTypeID) -> bool {
 }
 
 #[repr(u32)] // only for C interface
-#[derive(Copy, Clone, TryFromPrimitive)] // only for C interface
+#[derive(Copy, Clone, TryFromPrimitive, IntoPrimitive)] // only for C interface
 pub enum CipherDirection {
     Encrypt = 0,
     Decrypt = 1,

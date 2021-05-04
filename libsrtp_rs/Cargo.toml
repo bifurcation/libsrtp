@@ -16,6 +16,8 @@ hex = "0.4.3"
 rand = "0.8.3"
 
 [dependencies]
-libc = "0.2.93" # Only until we can get rid of src/c/alloc.rs
-num_enum = "0.5.1" # For enum conversion to C values
-cstr = "0.2.8" # For C string constants
+libc = "0.2.93"     # Only until we can get rid of src/c/alloc.rs
+num_enum = "0.5.1"  # For enum conversion to C values
+cstr = "0.2.8"      # For C string constants
+cpu-time = "1.0.0"  # For cipher performance testing in C interface
+rand = "0.8.3"      # For rand_for_tests functions
