@@ -159,14 +159,13 @@ elseif(NOT ENABLE_RUST)
   )
 endif()
 
-set(HASHES_SOURCES_C
-  crypto/hash/auth.c
-  crypto/hash/auth_test_cases.c
-  crypto/hash/auth_test_cases.h
-)
+set(HASHES_SOURCES_C)
 if(NOT ENABLE_RUST)
   list(APPEND CIPHERS_SOURCES_C
     crypto/hash/null_auth.c
+    crypto/hash/auth.c
+    crypto/hash/auth_test_cases.c
+    crypto/hash/auth_test_cases.h
   )
 endif()
 
