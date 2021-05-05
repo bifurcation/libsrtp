@@ -190,11 +190,11 @@ endif()
 
 set(KERNEL_SOURCES_C
   crypto/kernel/crypto_kernel.c
-  crypto/kernel/err.c
 )
 if(NOT ENABLE_RUST)
   list(APPEND KERNEL_SOURCES_C
     crypto/kernel/alloc.c
+    crypto/kernel/err.c
     crypto/kernel/key.c
   )
 endif()
