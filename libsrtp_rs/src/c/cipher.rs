@@ -556,3 +556,52 @@ pub extern "C" fn srtp_cipher_rand_for_tests(dest: *mut u8, len: u32) {
 pub extern "C" fn srtp_cipher_rand_u32_for_tests() -> u32 {
     rand::random()
 }
+
+//
+// Manufacture srtp_cipher_t from Cipher
+//
+
+extern "C" fn drop_type_then_drop_cipher(c: *mut srtp_cipher_t) -> Error {
+    // Take over ownership of the type object so that gets freed
+    let c_ref = unsafe { c.as_ref().unwrap() };
+    let _ = unsafe { Box::from_raw(c_ref.type_ as *mut srtp_cipher_type_t) };
+    zero_and_drop(c)
+}
+
+// Ciphers not implemented as static types
+static srtp_aes_icm_192_description: &CStr = cstr!("aes icm 192");
+static srtp_aes_gcm_128_description: &CStr = cstr!("aes gcm 128");
+static srtp_aes_gcm_256_description: &CStr = cstr!("aes gcm 256");
+
+pub fn make_cipher_t(id: CipherTypeID, c: Box<dyn Cipher>) -> srtp_cipher_t {
+    let description = match id {
+        CipherTypeID::Null => srtp_null_cipher_description.as_ptr(),
+        CipherTypeID::AesIcm128 => srtp_aes_icm_128_description.as_ptr(),
+        CipherTypeID::AesIcm192 => srtp_aes_icm_192_description.as_ptr(),
+        CipherTypeID::AesIcm256 => srtp_aes_icm_256_description.as_ptr(),
+        CipherTypeID::AesGcm128 => srtp_aes_gcm_128_description.as_ptr(),
+        CipherTypeID::AesGcm256 => srtp_aes_gcm_256_description.as_ptr(),
+    };
+
+    let cipher_type = Box::new(srtp_cipher_type_t {
+        alloc: None,
+        dealloc: Some(drop_type_then_drop_cipher),
+        init: Some(cipher_init),
+        set_aad: Some(cipher_set_aad),
+        encrypt: Some(cipher_encrypt),
+        decrypt: Some(cipher_decrypt),
+        set_iv: Some(cipher_set_iv),
+        get_tag: Some(cipher_get_tag),
+        description: description,
+        test_data: std::ptr::null(),
+        id: id as srtp_cipher_type_id_t,
+    });
+
+    let key_size = c.key_size() as c_int;
+    srtp_cipher_t {
+        type_: Box::into_raw(cipher_type),
+        state: Box::into_raw(Box::new(c)),
+        key_len: key_size,
+        algorithm: id as c_int,
+    }
+}

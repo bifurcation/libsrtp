@@ -6,6 +6,7 @@ pub enum Error {
     // TODO(RLB): During translation, we are promoting this as needed, to make sure we only end up with the set we need
     Fail = 1,       // unspecified failure
     BadParam = 2,   // unsupported parameter
+    InitFail = 5,   // couldn't initialize
     Terminus = 6,   // can't process as much data as requested
     CipherFail = 8, // cipher failure
     ReplayFail = 9, // replay check failed (bad index)
@@ -17,7 +18,6 @@ pub enum Error {
                     /*
                     alloc_fail = 3,     // couldn't allocate memory
                     dealloc_fail = 4,   // couldn't deallocate properly
-                    init_fail = 5,      // couldn't initialize
                     auth_fail = 7,      // authentication failure
                     no_ctx = 13,        // no appropriate context found
                     cant_check = 14,    // unable to perform desired validation

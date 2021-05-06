@@ -332,3 +332,45 @@ pub extern "C" fn srtp_auth_type_test(
 ) -> Error {
     Error::Ok // TODO
 }
+
+//
+// Manufacture srtp_auth_t from Auth
+//
+
+extern "C" fn drop_type_then_drop_auth(c: *mut srtp_auth_t) -> Error {
+    // Take over ownership of the type object so that gets freed, since srtp_auth_t::drop doesn't
+    // do this (in order to allow for references to static auth types
+    let c_ref = unsafe { c.as_ref().unwrap() };
+    let _ = unsafe { Box::from_raw(c_ref.type_ as *mut srtp_auth_type_t) };
+    zero_and_drop(c)
+}
+
+pub fn make_auth_t(id: AuthTypeID, a: Box<dyn Auth>) -> srtp_auth_t {
+    let description = match id {
+        AuthTypeID::Null => srtp_null_auth_description.as_ptr(),
+        AuthTypeID::HmacSha1 => srtp_hmac_description.as_ptr(),
+    };
+
+    let auth_type = Box::new(srtp_auth_type_t {
+        alloc: None,
+        dealloc: Some(drop_type_then_drop_auth),
+        init: Some(auth_init),
+        compute: Some(auth_compute),
+        update: Some(auth_update),
+        start: Some(auth_start),
+        description: description,
+        test_data: std::ptr::null(),
+        id: id as srtp_auth_type_id_t,
+    });
+
+    let key_size = a.key_size() as c_int;
+    let tag_size = a.tag_size() as c_int;
+    let prefix_size = a.prefix_size() as c_int;
+    srtp_auth_t {
+        type_: Box::into_raw(auth_type),
+        state: Box::into_raw(Box::new(a)),
+        key_len: key_size,
+        out_len: tag_size,
+        prefix_len: prefix_size,
+    }
+}

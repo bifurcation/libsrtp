@@ -3,12 +3,27 @@ use crate::sha1;
 use crate::srtp::Error;
 
 struct HMAC {
+    key_size: usize,
+    tag_size: usize,
+    prefix_size: usize,
     ipad: [u8; 64],
     opad: [u8; 64],
     ctx: sha1::Context,
 }
 
 impl Auth for HMAC {
+    fn key_size(&self) -> usize {
+        self.key_size
+    }
+
+    fn tag_size(&self) -> usize {
+        self.tag_size
+    }
+
+    fn prefix_size(&self) -> usize {
+        self.prefix_size
+    }
+
     fn init(&mut self, key: &[u8]) -> Result<(), Error> {
         self.ipad.fill(0x36);
         self.opad.fill(0x5c);
@@ -67,6 +82,9 @@ impl AuthType for NativeHMAC {
         }
 
         Ok(Box::new(HMAC {
+            key_size: key_len,
+            tag_size: out_len,
+            prefix_size: 0,
             ipad: [0; 64],
             opad: [0; 64],
             ctx: sha1::Context::new(),

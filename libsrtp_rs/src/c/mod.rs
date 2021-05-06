@@ -2,6 +2,7 @@ pub mod aes;
 pub mod alloc;
 pub mod auth;
 pub mod cipher;
+pub mod crypto_kernel;
 pub mod err;
 pub mod key_limit;
 pub mod replay;

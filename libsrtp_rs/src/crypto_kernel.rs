@@ -77,6 +77,9 @@ pub enum AuthTypeID {
 }
 
 pub trait Auth {
+    fn key_size(&self) -> usize;
+    fn tag_size(&self) -> usize;
+    fn prefix_size(&self) -> usize;
     fn init(&mut self, key: &[u8]) -> Result<(), Error>;
     fn start(&mut self) -> Result<(), Error>;
     fn update(&mut self, update: &[u8]) -> Result<(), Error>;

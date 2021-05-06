@@ -1,9 +1,25 @@
 use crate::crypto_kernel::{Auth, AuthType, AuthTypeID};
 use crate::srtp::Error;
 
-struct Context;
+struct Context {
+    key_size: usize,
+    tag_size: usize,
+    prefix_size: usize,
+}
 
 impl Auth for Context {
+    fn key_size(&self) -> usize {
+        self.key_size
+    }
+
+    fn tag_size(&self) -> usize {
+        self.tag_size
+    }
+
+    fn prefix_size(&self) -> usize {
+        self.prefix_size
+    }
+
     fn init(&mut self, key: &[u8]) -> Result<(), Error> {
         if key.len() > 0 {
             Err(Error::BadParam)
@@ -41,7 +57,11 @@ impl AuthType for NullAuth {
             return Err(Error::BadParam);
         }
 
-        Ok(Box::new(Context {}))
+        Ok(Box::new(Context {
+            key_size: key_len,
+            tag_size: out_len,
+            prefix_size: out_len,
+        }))
     }
 }
 
