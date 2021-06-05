@@ -50,3 +50,6 @@ test/test_srtp
 # rust things
 libsrtp_rs/Cargo.lock
 libsrtp_rs/target
+
+# vim things
+*.swp

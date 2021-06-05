@@ -7,6 +7,7 @@ pub mod err;
 pub mod key_limit;
 pub mod replay;
 pub mod sha1;
+pub mod srtp;
 
 use crate::srtp::Error;
 

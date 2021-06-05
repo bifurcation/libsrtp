@@ -1,3 +1,9 @@
+use crate::crypto_kernel::*;
+use crate::key_limit::*;
+use crate::policy::*;
+use crate::replay::*;
+use std::collections::LinkedList;
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -34,4 +40,44 @@ pub enum Error {
                     pkt_idx_old = 26,   // packet index is too old to consider
                     pkt_idx_adv = 27,   // packet index advanced, reset needed
                     */
+}
+
+enum Direction {
+    Unknown = 0,
+    Sender = 1,
+    Receiver = 2,
+}
+
+struct SessionKeys {
+    rtp_cipher: Box<dyn Cipher>,
+    rtp_xtn_hdr_cipher: Box<dyn Cipher>,
+    rtp_auth: Box<dyn Auth>,
+    rtcp_cipher: Box<dyn Cipher>,
+    rtcp_auth: Box<dyn Auth>,
+
+    salt: [u8; 0],   // XXX SRTP_AEAD_SALT_LEN
+    c_salt: [u8; 0], // XXX SRTP_AEAD_SALT_LEN
+    mki_id: Option<u8>,
+    mki_size: usize,
+    limit: KeyLimitContext,
+}
+
+struct Stream {
+    ssrc: u32,
+    session_keys: SessionKeys,
+    num_master_keys: usize,
+    rtp_rdbx: ExtendedReplayDB,
+    rtp_rdb: ReplayDB,
+    rtp_services: SecurityServices,
+    rtcp_services: SecurityServices,
+    direction: Direction,
+    allow_repeat_tx: bool,
+    enc_xtn_hdr: Vec<u32>,
+    pending_roc: u32,
+}
+
+pub struct Context {
+    stream_list: LinkedList<Stream>,
+    stream_template: Stream,
+    // XXX(RLB) user_data: Box<dyn Any> ?
 }

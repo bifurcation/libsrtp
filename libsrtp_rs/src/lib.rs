@@ -7,6 +7,7 @@ pub mod hmac;
 pub mod key_limit;
 pub mod null_auth;
 pub mod null_cipher;
+pub mod policy;
 pub mod replay;
 pub mod sha1;
 pub mod srtp;
