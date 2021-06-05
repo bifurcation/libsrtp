@@ -244,9 +244,20 @@ pub struct Policy {
     pub ssrc: Ssrc,
     pub rtp: CryptoPolicy,
     pub rtcp: CryptoPolicy,
-    pub key: Vec<u8>,
+    pub key: Option<Vec<u8>>,
     pub keys: Vec<MasterKey>,
     pub window_size: usize,
     pub allow_repeat_tx: bool,
     pub enc_xtn_hdr: Vec<ExtensionHeaderId>,
+}
+
+impl Policy {
+    pub fn validate_master_keys(&self) -> bool {
+        if let None = self.key {
+            if self.keys.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
 }

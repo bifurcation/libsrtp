@@ -253,9 +253,18 @@ pub struct ExtendedReplayDB {
 
 impl ExtendedReplayDB {
     pub fn new(window_bits: usize) -> Result<Self, Error> {
+        if window_bits != 0 && (window_bits < 64 || window_bits >= 0x8000) {
+            return Err(Error::BadParam);
+        }
+
+        let mut actual_window_bits = 128;
+        if window_bits != 0 {
+            actual_window_bits = window_bits;
+        }
+
         Ok(Self {
             index: 0,
-            bitmask: BitVector::new(window_bits)?,
+            bitmask: BitVector::new(actual_window_bits)?,
         })
     }
 

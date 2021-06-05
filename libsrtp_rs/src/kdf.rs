@@ -5,7 +5,7 @@ use num_enum::IntoPrimitive;
 
 #[repr(u8)]
 #[derive(IntoPrimitive)]
-pub enum PrfLabel {
+pub enum KdfLabel {
     RtpEncryption = 0x00,
     RtpMsgAuth = 0x01,
     RtpSalt = 0x02,
@@ -33,11 +33,11 @@ impl KDF {
             cipher: kernel.cipher(cipher_id, key.len(), 0)?,
         };
 
-        kdf.cipher.init(key);
+        kdf.cipher.init(key)?;
         Ok(kdf)
     }
 
-    pub fn generate(&mut self, label: PrfLabel, value: &mut [u8]) -> Result<(), Error> {
+    pub fn generate(&mut self, label: KdfLabel, value: &mut [u8]) -> Result<(), Error> {
         let mut iv = [0u8; 16];
         iv[7] = label.into();
         self.cipher.set_iv(&iv, CipherDirection::Encrypt)?;
