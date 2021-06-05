@@ -72,12 +72,71 @@ struct Stream {
     rtcp_services: SecurityServices,
     direction: Direction,
     allow_repeat_tx: bool,
-    enc_xtn_hdr: Vec<u32>,
+    enc_xtn_hdr: Vec<ExtensionHeaderId>,
     pending_roc: u32,
 }
 
+impl Stream {
+    fn new(kernel: &CryptoKernel, policy: &Policy) -> Result<Self, Error> {
+        Err(Error::Fail) // TODO
+    }
+}
+
 pub struct Context {
-    stream_list: LinkedList<Stream>,
-    stream_template: Stream,
+    streams: LinkedList<Stream>,
+    stream_template: Option<Stream>,
     // XXX(RLB) user_data: Box<dyn Any> ?
+}
+
+impl Context {
+    pub fn new(kernel: &CryptoKernel, policies: &[Policy]) -> Result<Self, Error> {
+        let mut ctx = Self {
+            streams: LinkedList::new(),
+            stream_template: None,
+            // XXX(RLB) user
+        };
+
+        for p in policies {
+            if let Err(err) = ctx.add_stream(kernel, p) {
+                return Err(err);
+            }
+        }
+
+        Ok(ctx)
+    }
+
+    pub fn add_stream(&mut self, kernel: &CryptoKernel, policy: &Policy) -> Result<(), Error> {
+        let stream = match Stream::new(kernel, policy) {
+            Ok(x) => x,
+            Err(err) => return Err(err),
+        };
+
+        match policy.ssrc.type_ {
+            SsrcType::Specific => {
+                // SSRC-specific streams are added to the stream list
+                self.streams.push_front(stream);
+                Ok(())
+            }
+            SsrcType::Inbound | SsrcType::Outbound => {
+                // A wildcard inbound or outbound policy sets the stream template.  If the template
+                // is already set, then the policy set is inconsistent.
+                if let Some(_) = self.stream_template {
+                    return Err(Error::BadParam);
+                }
+
+                self.stream_template = Some(stream);
+                Ok(())
+            }
+            _ => Err(Error::BadParam),
+        }
+    }
+
+    fn get_stream(&self, ssrc: u32) -> Option<&Stream> {
+        for stream in &self.streams {
+            if stream.ssrc == ssrc {
+                return Some(stream);
+            }
+        }
+        None
+    }
 }

@@ -11,9 +11,11 @@ pub mod constants {
     pub const AEAD_SALT_LEN: usize = 12;
 
     pub const AES_128_KEY_LEN: usize = 16;
+    pub const AES_192_KEY_LEN: usize = 24;
     pub const AES_256_KEY_LEN: usize = 32;
 
     pub const AES_ICM_128_KEY_LEN_WSALT: usize = SALT_LEN + AES_128_KEY_LEN;
+    pub const AES_ICM_192_KEY_LEN_WSALT: usize = SALT_LEN + AES_192_KEY_LEN;
     pub const AES_ICM_256_KEY_LEN_WSALT: usize = SALT_LEN + AES_256_KEY_LEN;
 }
 

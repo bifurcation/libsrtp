@@ -45,12 +45,12 @@ impl ProfileID {
 }
 
 pub struct CryptoPolicy {
-    cipher_type: CipherTypeID,
-    cipher_key_len: usize,
-    auth_type: AuthTypeID,
-    auth_key_len: usize,
-    auth_tag_len: usize,
-    sec_serv: SecurityServices,
+    pub cipher_type: CipherTypeID,
+    pub cipher_key_len: usize,
+    pub auth_type: AuthTypeID,
+    pub auth_key_len: usize,
+    pub auth_tag_len: usize,
+    pub sec_serv: SecurityServices,
 }
 
 impl CryptoPolicy {
@@ -229,24 +229,24 @@ pub enum SsrcType {
 }
 
 pub struct Ssrc {
-    type_: SsrcType,
-    value: u32,
+    pub type_: SsrcType,
+    pub value: u32,
 }
 
 pub struct MasterKey {
-    key: Vec<u8>,
-    id: Vec<u8>,
+    pub key: Vec<u8>,
+    pub id: Vec<u8>,
 }
 
-type ExtensionHeaderId = u8;
+pub type ExtensionHeaderId = u8;
 
 pub struct Policy {
-    ssrc: Ssrc,
-    rtp: CryptoPolicy,
-    rtcp: CryptoPolicy,
-    key: Vec<u8>,
-    keys: Vec<MasterKey>,
-    window_size: usize,
-    allow_repeat_tx: bool,
-    enc_xtn_hdr: Vec<ExtensionHeaderId>,
+    pub ssrc: Ssrc,
+    pub rtp: CryptoPolicy,
+    pub rtcp: CryptoPolicy,
+    pub key: Vec<u8>,
+    pub keys: Vec<MasterKey>,
+    pub window_size: usize,
+    pub allow_repeat_tx: bool,
+    pub enc_xtn_hdr: Vec<ExtensionHeaderId>,
 }

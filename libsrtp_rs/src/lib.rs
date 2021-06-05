@@ -4,6 +4,7 @@ pub mod aes_icm;
 pub mod crypto_kernel;
 pub mod crypto_test;
 pub mod hmac;
+pub mod kdf;
 pub mod key_limit;
 pub mod null_auth;
 pub mod null_cipher;
