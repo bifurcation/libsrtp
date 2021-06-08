@@ -1073,6 +1073,14 @@ pub union V128 {
     v128: u128,
 }
 
+impl PartialEq for V128 {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { self.v128 == other.v128 }
+    }
+}
+
+impl Eq for V128 {}
+
 impl V128 {
     fn zero() -> V128 {
         V128 { v128: 0 }
@@ -1153,11 +1161,13 @@ pub enum KeySize {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RoundCount {
     Aes128 = 10,
     Aes256 = 14,
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub struct EncryptionKey {
     round: [V128; 15],
     num_rounds: RoundCount,

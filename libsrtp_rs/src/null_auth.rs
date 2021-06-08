@@ -1,5 +1,6 @@
 use crate::crypto_kernel::{Auth, AuthType, AuthTypeID};
 use crate::srtp::Error;
+use std::any::Any;
 
 struct Context {
     key_size: usize,
@@ -42,6 +43,22 @@ impl Auth for Context {
         } else {
             Ok(())
         }
+    }
+
+    fn clone_inner(&self) -> Box<dyn Auth> {
+        Box::new(Context {
+            key_size: self.key_size,
+            tag_size: self.tag_size,
+            prefix_size: self.prefix_size,
+        })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn equals(&self, other: &Box<dyn Auth>) -> bool {
+        other.as_any().is::<Context>()
     }
 }
 

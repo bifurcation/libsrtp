@@ -3,7 +3,6 @@ use crate::kdf::*;
 use crate::key_limit::*;
 use crate::policy::*;
 use crate::replay::*;
-use std::collections::LinkedList;
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,13 +19,13 @@ pub enum Error {
     ReplayOld = 10, // replay check failed (index too old)
     AlgoFail = 11,  // algorithm failed test routine
     NoSuchOp = 12,  // unsupported operation
+    NoContext = 13, // no appropriate context found
     KeyExpired = 15, // can't use key any more
 
                     /*
                     alloc_fail = 3,     // couldn't allocate memory
                     dealloc_fail = 4,   // couldn't deallocate properly
                     auth_fail = 7,      // authentication failure
-                    no_ctx = 13,        // no appropriate context found
                     cant_check = 14,    // unable to perform desired validation
                     socket_err = 16,    // error in use of socket
                     signal_err = 17,    // error in use POSIX signals
@@ -43,12 +42,14 @@ pub enum Error {
                     */
 }
 
+#[derive(Clone)]
 enum Direction {
     Unknown = 0,
     Sender = 1,
     Receiver = 2,
 }
 
+#[derive(Clone)]
 struct SessionKeys {
     rtp_cipher: Box<dyn Cipher>,
     rtp_xtn_hdr_cipher: Box<dyn Cipher>,
@@ -87,26 +88,18 @@ impl SessionKeys {
         let xtn_hdr_key_len = rtp.cipher_key_len;
         // TODO(RLB) if GCM, use corresponding ICM
 
-        let mut sk = SessionKeys {
-            rtp_cipher: kernel.cipher(rtp.cipher_type, rtp.cipher_key_len, rtp.auth_tag_len)?,
-            rtp_xtn_hdr_cipher: kernel.cipher(
-                xtn_hdr_cipher_type,
-                xtn_hdr_key_len,
-                rtp.auth_tag_len,
-            )?,
-            rtp_auth: kernel.auth(rtp.auth_type, rtp.auth_key_len, rtp.auth_tag_len)?,
-            rtcp_cipher: kernel.cipher(rtcp.cipher_type, rtcp.cipher_key_len, rtcp.auth_tag_len)?,
-            rtcp_auth: kernel.auth(rtcp.auth_type, rtcp.auth_key_len, rtcp.auth_tag_len)?,
-
-            salt: Vec::new(),
-            c_salt: Vec::new(),
-            mki_id: key.id.clone(),
-            limit: KeyLimitContext::new(),
-        };
+        let mut rtp_cipher =
+            kernel.cipher(rtp.cipher_type, rtp.cipher_key_len, rtp.auth_tag_len)?;
+        let mut rtp_xtn_hdr_cipher =
+            kernel.cipher(xtn_hdr_cipher_type, xtn_hdr_key_len, rtp.auth_tag_len)?;
+        let mut rtp_auth = kernel.auth(rtp.auth_type, rtp.auth_key_len, rtp.auth_tag_len)?;
+        let mut rtcp_cipher =
+            kernel.cipher(rtcp.cipher_type, rtcp.cipher_key_len, rtcp.auth_tag_len)?;
+        let mut rtcp_auth = kernel.auth(rtcp.auth_type, rtcp.auth_key_len, rtcp.auth_tag_len)?;
 
         // Set up KDF
-        let rtp_key_size = sk.rtp_cipher.key_size();
-        let rtcp_key_size = sk.rtcp_cipher.key_size();
+        let rtp_key_size = rtp_cipher.key_size();
+        let rtcp_key_size = rtcp_cipher.key_size();
         let rtp_base_key_size = base_key_size(rtp.cipher_type, rtp_key_size);
         let rtcp_base_key_size = base_key_size(rtcp.cipher_type, rtcp_key_size);
         if key.key.len() != rtp_key_size {
@@ -132,15 +125,15 @@ impl SessionKeys {
             &mut tmp_key[rtp_base_key_size..rtp_key_size],
         )?;
 
-        sk.rtp_cipher.init(&tmp_key[..rtp_key_size])?;
-        sk.salt = tmp_key[rtp_base_key_size..rtp_key_size].to_vec();
+        rtp_cipher.init(&tmp_key[..rtp_key_size])?;
+        let salt = tmp_key[rtp_base_key_size..rtp_key_size].to_vec();
 
         // Initialize RTP extension header cipher
         // TODO(RLB): This might require adaptation to use a different KDF for GCM ciphers (?)
         if xtn_hdr_cipher_type != rtp.cipher_type {
             return Err(Error::BadParam);
         }
-        let xtn_hdr_key_size = sk.rtp_cipher.key_size();
+        let xtn_hdr_key_size = rtp_cipher.key_size();
         let xtn_hdr_base_key_size = base_key_size(xtn_hdr_cipher_type, xtn_hdr_key_size);
 
         tmp_key = [0u8; MAX_SRTP_KEY_SIZE];
@@ -153,15 +146,14 @@ impl SessionKeys {
             &mut tmp_key[xtn_hdr_base_key_size..xtn_hdr_key_size],
         )?;
 
-        sk.rtp_xtn_hdr_cipher
-            .init(&mut tmp_key[..xtn_hdr_key_size])?;
+        rtp_xtn_hdr_cipher.init(&mut tmp_key[..xtn_hdr_key_size])?;
 
         // Initialize RTP authentication
         tmp_key = [0u8; MAX_SRTP_KEY_SIZE];
         {
-            let auth_key = &mut tmp_key[..sk.rtp_auth.key_size()];
+            let auth_key = &mut tmp_key[..rtp_auth.key_size()];
             kdf.generate(KdfLabel::RtpMsgAuth, auth_key)?;
-            sk.rtp_auth.init(auth_key)?;
+            rtp_auth.init(auth_key)?;
         }
 
         // Initialize RTCP encryption
@@ -172,26 +164,38 @@ impl SessionKeys {
             &mut tmp_key[rtcp_base_key_size..rtcp_key_size],
         )?;
 
-        sk.rtcp_cipher.init(&tmp_key[..rtcp_key_size])?;
-        sk.c_salt = tmp_key[rtcp_base_key_size..rtcp_key_size].to_vec();
+        rtcp_cipher.init(&tmp_key[..rtcp_key_size])?;
+        let c_salt = tmp_key[rtcp_base_key_size..rtcp_key_size].to_vec();
 
         // Initialize RTCP authentication
         tmp_key = [0u8; MAX_SRTP_KEY_SIZE];
         {
-            let auth_key = &mut tmp_key[..sk.rtcp_auth.key_size()];
+            let auth_key = &mut tmp_key[..rtcp_auth.key_size()];
             kdf.generate(KdfLabel::RtcpMsgAuth, auth_key)?;
-            sk.rtcp_auth.init(auth_key)?;
+            rtcp_auth.init(auth_key)?;
         }
 
-        Ok(sk)
+        Ok(SessionKeys {
+            rtp_cipher: rtp_cipher,
+            rtp_xtn_hdr_cipher: rtp_xtn_hdr_cipher,
+            rtp_auth: rtp_auth,
+            rtcp_cipher: rtcp_cipher,
+            rtcp_auth: rtcp_auth,
+
+            salt: salt,
+            c_salt: c_salt,
+            mki_id: key.id.clone(),
+            limit: KeyLimitContext::new(),
+        })
     }
 }
 
+#[derive(Clone)]
 struct Stream {
     ssrc: u32,
     session_keys: Vec<SessionKeys>,
     rtp_rdbx: ExtendedReplayDB,
-    rtp_rdb: ReplayDB,
+    rtcp_rdb: ReplayDB,
     rtp_services: SecurityServices,
     rtcp_services: SecurityServices,
     direction: Direction,
@@ -223,7 +227,7 @@ impl Stream {
             ssrc: policy.ssrc.value,
             session_keys: session_keys,
             rtp_rdbx: ExtendedReplayDB::new(policy.window_size)?,
-            rtp_rdb: ReplayDB::new(),
+            rtcp_rdb: ReplayDB::new(),
             rtp_services: policy.rtp.sec_serv,
             rtcp_services: policy.rtp.sec_serv,
             direction: Direction::Unknown,
@@ -233,11 +237,31 @@ impl Stream {
         })
     }
 
-    // TODO pub fn clone(ssrc: u32) -> Result<Self, Error>
+    pub fn same_crypto(&self, other: &Self) -> bool {
+        self.session_keys[0]
+            .rtp_auth
+            .equals(&other.session_keys[0].rtp_auth)
+    }
+
+    pub fn clone_for_ssrc(&self, ssrc: u32) -> Result<Self, Error> {
+        let mut stream = self.clone();
+
+        // Set the SSRC to the one provided
+        stream.ssrc = ssrc;
+
+        // Re-initialize the replay databases
+        stream.rtp_rdbx = ExtendedReplayDB::new(self.rtp_rdbx.window_size())?;
+        stream.rtcp_rdb = ReplayDB::new();
+
+        // Reset the pending ROC
+        stream.pending_roc = 0;
+
+        Ok(stream)
+    }
 }
 
 pub struct Context {
-    streams: LinkedList<Stream>,
+    streams: Vec<Stream>,
     stream_template: Option<Stream>,
     // XXX(RLB) user_data: Box<dyn Any> ?
 }
@@ -245,7 +269,7 @@ pub struct Context {
 impl Context {
     pub fn new(kernel: &CryptoKernel, policies: &[Policy]) -> Result<Self, Error> {
         let mut ctx = Self {
-            streams: LinkedList::new(),
+            streams: Vec::new(),
             stream_template: None,
             // XXX(RLB) user
         };
@@ -260,15 +284,12 @@ impl Context {
     }
 
     pub fn add_stream(&mut self, kernel: &CryptoKernel, policy: &Policy) -> Result<(), Error> {
-        let stream = match Stream::new(kernel, policy) {
-            Ok(x) => x,
-            Err(err) => return Err(err),
-        };
+        let stream = Stream::new(kernel, policy)?;
 
         match policy.ssrc.type_ {
             SsrcType::Specific => {
                 // SSRC-specific streams are added to the stream list
-                self.streams.push_front(stream);
+                self.streams.push(stream);
                 Ok(())
             }
             SsrcType::Inbound | SsrcType::Outbound => {
@@ -285,18 +306,106 @@ impl Context {
         }
     }
 
-    fn get_stream(&self, ssrc: u32) -> Option<&Stream> {
-        for stream in &self.streams {
-            if stream.ssrc == ssrc {
-                return Some(stream);
+    fn get_stream(&self, ssrc: u32) -> Option<usize> {
+        for i in 0..self.streams.len() {
+            if self.streams[i].ssrc == ssrc {
+                return Some(i);
             }
         }
         None
     }
 
-    // TODO remove_stream
-    // TODO update
-    // TODO update_stream
+    pub fn remove_stream(&mut self, ssrc: u32) -> Result<(), Error> {
+        match self.get_stream(ssrc) {
+            Some(i) => {
+                self.streams.remove(i);
+                Ok(())
+            }
+            None => Err(Error::NoContext),
+        }
+    }
+
+    pub fn update(&mut self, kernel: &CryptoKernel, policies: &[Policy]) -> Result<(), Error> {
+        for p in policies {
+            self.update_stream(kernel, p)?;
+        }
+        Ok(())
+    }
+
+    pub fn update_stream(&mut self, kernel: &CryptoKernel, policy: &Policy) -> Result<(), Error> {
+        match policy.ssrc.type_ {
+            SsrcType::Specific => self.update_specific_stream(kernel, policy),
+            SsrcType::Inbound | SsrcType::Outbound => self.update_template_streams(kernel, policy),
+            _ => Err(Error::BadParam),
+        }
+    }
+
+    fn update_specific_stream(
+        &mut self,
+        kernel: &CryptoKernel,
+        policy: &Policy,
+    ) -> Result<(), Error> {
+        let ssrc = policy.ssrc.value;
+        let stream_index = self.get_stream(ssrc).ok_or(Error::BadParam)?;
+
+        // Save the old extended seq
+        let old_index = self.streams[stream_index].rtp_rdbx.packet_index();
+        let old_rtcp_rdb = self.streams[stream_index].rtcp_rdb.clone();
+
+        // Replace the stream with a fresh one
+        self.remove_stream(ssrc)?;
+        self.add_stream(kernel, policy)?;
+
+        // Restore the old extended seq
+        let stream_index = self.get_stream(ssrc).ok_or(Error::BadParam)?;
+
+        self.streams[stream_index]
+            .rtp_rdbx
+            .set_packet_index(old_index);
+        self.streams[stream_index].rtcp_rdb = old_rtcp_rdb;
+
+        Ok(())
+    }
+
+    fn update_template_streams(
+        &mut self,
+        kernel: &CryptoKernel,
+        policy: &Policy,
+    ) -> Result<(), Error> {
+        let stream_template = self.stream_template.as_ref().ok_or(Error::BadParam)?;
+
+        // Initialize a new template stream
+        let new_stream_template = Stream::new(kernel, policy)?;
+
+        // Replace all old templated streams
+        // XXX(RLB): We do this a bit differently than C libsrtp because we use a Vec instead of a
+        // linked list.  Tracking the new stream indices and doing replaces directly means that we
+        // avoid changing the Vec while we're iterating over it, and we avoid repeatedly changing
+        // the size of the Vec.
+        let mut new_streams = Vec::<(usize, Stream)>::new();
+        for i in 0..self.streams.len() {
+            let stream = &self.streams[i];
+            if !stream.same_crypto(&stream_template) {
+                continue;
+            }
+
+            let ssrc = stream.ssrc;
+            let mut new_stream = new_stream_template.clone_for_ssrc(ssrc)?;
+            new_stream
+                .rtp_rdbx
+                .set_packet_index(stream.rtp_rdbx.packet_index());
+            new_stream.rtcp_rdb = stream.rtcp_rdb.clone();
+
+            new_streams.push((i, new_stream));
+        }
+
+        self.stream_template = Some(new_stream_template);
+        for (i, new_stream) in new_streams.drain(..) {
+            self.streams[i] = new_stream;
+        }
+
+        Ok(())
+    }
 
     // TODO srtp_protect
     // TODO srtp_protect_mki

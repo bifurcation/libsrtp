@@ -39,6 +39,10 @@ impl Cipher for Context {
     fn get_tag(&mut self, _tag: &mut [u8]) -> Result<usize, Error> {
         Err(Error::NoSuchOp)
     }
+
+    fn clone_inner(&self) -> Box<dyn Cipher> {
+        Box::new(Context {})
+    }
 }
 
 pub struct NullCipher;

@@ -1,6 +1,7 @@
 use crate::crypto_kernel::{Auth, AuthType, AuthTypeID};
 use crate::sha1;
 use crate::srtp::Error;
+use std::any::Any;
 
 struct HMAC {
     key_size: usize,
@@ -66,6 +67,29 @@ impl Auth for HMAC {
 
         tag.copy_from_slice(&outer_hash[..tag.len()]);
         Ok(())
+    }
+
+    fn clone_inner(&self) -> Box<dyn Auth> {
+        Box::new(HMAC {
+            key_size: self.key_size,
+            tag_size: self.tag_size,
+            prefix_size: self.prefix_size,
+            ipad: self.ipad,
+            opad: self.opad,
+            ctx: sha1::Context::new(),
+        })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn equals(&self, other: &Box<dyn Auth>) -> bool {
+        let concrete_other = match other.as_any().downcast_ref::<HMAC>() {
+            Some(x) => x,
+            None => return false,
+        };
+        self.ipad == concrete_other.ipad
     }
 }
 

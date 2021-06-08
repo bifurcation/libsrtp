@@ -152,6 +152,18 @@ impl Cipher for Context {
     fn get_tag(&mut self, _tag: &mut [u8]) -> Result<usize, Error> {
         Err(Error::NoSuchOp)
     }
+
+    fn clone_inner(&self) -> Box<dyn Cipher> {
+        Box::new(Context {
+            counter: 0,
+            salt_block: self.salt_block,
+            counter_block: [0; 16],
+            buffer: [0; 16],
+            expanded_key: self.expanded_key.clone(),
+            bytes_in_buffer: 0,
+            key_size: self.key_size,
+        })
+    }
 }
 
 pub struct NativeAesIcm {

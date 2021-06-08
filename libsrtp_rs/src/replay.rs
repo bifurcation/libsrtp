@@ -1,6 +1,7 @@
 use crate::srtp::Error;
 use std::convert::TryFrom;
 
+#[derive(Clone)]
 struct Bitmask {
     storage: u128,
 }
@@ -31,6 +32,7 @@ impl Bitmask {
 }
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct ReplayDB {
     window_start: u32,
     bitmask: Bitmask,
@@ -171,6 +173,7 @@ impl ExtSeqNum for ExtendedSequenceNumber {
 }
 
 #[repr(C)]
+#[derive(Clone)]
 struct BitVector {
     bit_length: usize,
     words: Box<[u64]>,
@@ -246,6 +249,7 @@ impl BitVector {
 }
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct ExtendedReplayDB {
     index: ExtendedSequenceNumber,
     bitmask: BitVector,
@@ -315,6 +319,10 @@ impl ExtendedReplayDB {
 
     pub fn packet_index(&self) -> ExtendedSequenceNumber {
         self.index
+    }
+
+    pub fn set_packet_index(&mut self, index: ExtendedSequenceNumber) {
+        self.index = index;
     }
 
     pub fn window_size(&self) -> usize {

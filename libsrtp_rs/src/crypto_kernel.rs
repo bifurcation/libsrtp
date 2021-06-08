@@ -1,6 +1,7 @@
 use crate::crypto_test;
 use crate::srtp::Error;
 use num_enum::{IntoPrimitive, TryFromPrimitive}; // only for C interface
+use std::any::Any;
 use std::collections::HashMap;
 
 //
@@ -61,6 +62,24 @@ pub trait Cipher {
     fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
     fn decrypt(&mut self, buf: &mut [u8], ct_size: usize) -> Result<usize, Error>;
     fn get_tag(&mut self, tag: &mut [u8]) -> Result<usize, Error>;
+
+    // XXX(RLB): These methods are required to support cloning of SRTP streams.  Right now, Cipher
+    // objects are not suitable for shared usage (Rc / Arc) because (a) doing anything with them
+    // requires mutation and (b) the encryption process is multi-stage, and would lead to
+    // inconsistent states if interrupted mid-stream.
+    //
+    // What we should do instead is simplify this API so that mutability is no longer required, and
+    // then use Rc<dyn Cipher> instead of Box<dyn Cipher> in consumers. Roughly:
+    //
+    //   fn encrypt(&self, iv: &[u8], aad: &[u8], buf: &mut [u8], pt_size: usize)
+    //   fn decrypt(&self, iv: &[u8], aad: &[u8], buf: &mut [u8], ct_size: usize)
+    fn clone_inner(&self) -> Box<dyn Cipher>;
+}
+
+impl Clone for Box<dyn Cipher> {
+    fn clone(&self) -> Box<dyn Cipher> {
+        self.clone_inner()
+    }
 }
 
 pub trait CipherType {
@@ -86,11 +105,22 @@ pub trait Auth {
     fn start(&mut self) -> Result<(), Error>;
     fn update(&mut self, update: &[u8]) -> Result<(), Error>;
     fn compute(&mut self, message: &[u8], tag: &mut [u8]) -> Result<(), Error>;
+
+    // XXX(RLB): See the screed in Cipher above
+    fn clone_inner(&self) -> Box<dyn Auth>;
+    fn as_any(&self) -> &dyn Any;
+    fn equals(&self, other: &Box<dyn Auth>) -> bool;
 }
 
 pub trait AuthType {
     fn id(&self) -> AuthTypeID;
     fn create(&self, key_len: usize, out_len: usize) -> Result<Box<dyn Auth>, Error>;
+}
+
+impl Clone for Box<dyn Auth> {
+    fn clone(&self) -> Box<dyn Auth> {
+        self.clone_inner()
+    }
 }
 
 //
