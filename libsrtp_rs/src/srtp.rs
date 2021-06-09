@@ -50,17 +50,17 @@ enum Direction {
 }
 
 #[derive(Clone)]
-struct SessionKeys {
-    rtp_cipher: Box<dyn Cipher>,
-    rtp_xtn_hdr_cipher: Box<dyn Cipher>,
-    rtp_auth: Box<dyn Auth>,
-    rtcp_cipher: Box<dyn Cipher>,
-    rtcp_auth: Box<dyn Auth>,
+pub(crate) struct SessionKeys {
+    pub rtp_cipher: Box<dyn Cipher>,
+    pub rtp_xtn_hdr_cipher: Box<dyn Cipher>,
+    pub rtp_auth: Box<dyn Auth>,
+    pub rtcp_cipher: Box<dyn Cipher>,
+    pub rtcp_auth: Box<dyn Auth>,
 
-    salt: Vec<u8>,
-    c_salt: Vec<u8>,
-    mki_id: Vec<u8>,
-    limit: KeyLimitContext,
+    pub salt: Vec<u8>,
+    pub c_salt: Vec<u8>,
+    pub mki_id: Vec<u8>,
+    pub limit: KeyLimitContext,
 }
 
 fn base_key_size(id: CipherTypeID, key_size: usize) -> usize {
@@ -407,8 +407,19 @@ impl Context {
         Ok(())
     }
 
-    // TODO srtp_protect
-    // TODO srtp_protect_mki
+    fn srtp_protect(&mut self, pkt: &[u8], pkt_len: usize) -> Result<usize, Error> {
+        self.srtp_protect_mki(pkt, pkt_len, false, 0)
+    }
+
+    fn srtp_protect_mki(
+        &mut self,
+        pkt: &[u8],
+        pkt_len: usize,
+        use_mki: bool,
+        mki: usize,
+    ) -> Result<usize, Error> {
+        Err(Error::Fail) // TODO
+    }
 
     // TODO srtp_unprotect
     // TODO srtp_unprotect_mki
