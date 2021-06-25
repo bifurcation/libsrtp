@@ -50,7 +50,7 @@ enum Direction {
 }
 
 #[derive(Clone)]
-pub(crate) struct SessionKeys {
+pub struct SessionKeys {
     pub rtp_cipher: Box<dyn Cipher>,
     pub rtp_xtn_hdr_cipher: Box<dyn Cipher>,
     pub rtp_auth: Box<dyn Auth>,

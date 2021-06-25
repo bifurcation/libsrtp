@@ -1,5 +1,47 @@
 use crate::srtp::{Error, SessionKeys};
 use packed_struct::prelude::*;
+use std::ops::Range;
+
+trait PackedSize {
+    const SIZE: usize;
+}
+
+struct OffsetReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> OffsetReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data: data, pos: 0 }
+    }
+
+    fn remaining(&self) -> usize {
+        self.data.len() - self.pos
+    }
+
+    fn read(&mut self, size: usize) -> Result<Range<usize>, Error> {
+        let start = self.pos;
+        let end = self.pos + size;
+        if end > self.data.len() {
+            return Err(Error::BadParam);
+        }
+
+        self.pos += size;
+        Ok(start..end)
+    }
+
+    fn unpack<T: PackedStruct + PackedSize>(&mut self) -> Result<T, Error> {
+        let val_range = self.read(T::SIZE)?;
+        let val_data = &self.data[val_range.clone()];
+        let val = T::unpack_from_slice(val_data).or(Err(Error::BadParam))?;
+        Ok(val)
+    }
+
+    fn rest(self) -> Range<usize> {
+        self.pos..self.data.len()
+    }
+}
 
 // https://datatracker.ietf.org/doc/html/rfc3711#section-3.1
 //
@@ -58,7 +100,7 @@ pub struct RtpHeader {
     ssrc: u32,
 }
 
-impl RtpHeader {
+impl PackedSize for RtpHeader {
     const SIZE: usize = 12;
 }
 
@@ -85,166 +127,113 @@ pub struct RtpExtensionHeader {
     length_u32: u16,
 }
 
-impl RtpExtensionHeader {
-    const SIZE: usize = 12;
+impl PackedSize for RtpExtensionHeader {
+    const SIZE: usize = 4;
 }
-
-/*
-// https://datatracker.ietf.org/doc/html/rfc5285#section-4.2
-//
-// "defined by profile" = 0xBEDE
-//
-//       0
-//       0 1 2 3 4 5 6 7
-//      +-+-+-+-+-+-+-+-+
-//      |  ID   |  len  |
-//      +-+-+-+-+-+-+-+-+
-#[derive(PackedStruct)]
-#[packed_struct(bit_numbering = "msb0")]
-pub struct OneByteExtensionHeader {
-    #[packed_field(size_bits = 4)]
-    id: u8,
-
-    #[packed_field(size_bits = 4)]
-    length: usize,
-}
-
-// https://datatracker.ietf.org/doc/html/rfc5285#section-4.3
-//
-//       0                   1
-//       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
-//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//      |         0x100         |appbits|
-//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
-//       0                   1
-//       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
-//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//      |       ID      |     length    |
-//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#[derive(PackedStruct)]
-#[packed_struct(bit_numbering = "msb0")]
-pub struct TwoByteExtensionHeader {
-    #[packed_field(size_bits = 8)]
-    id: u8,
-
-    #[packed_field(size_bits = 8)]
-    length: usize,
-}
-*/
 
 pub struct SrtpPacket<'a> {
+    data: &'a mut [u8],
     header: RtpHeader,
-    csrcs: &'a [u8],
-    extension: &'a [u8],
-    payload: &'a mut [u8],
-    mki: Option<&'a mut [u8]>,
-    tag: Option<&'a mut [u8]>,
+    csrc: Range<usize>,
+    ext_header: Option<RtpExtensionHeader>,
+    extension: Range<usize>,
+    payload: Range<usize>,
+    mki: Range<usize>,
+    tag: Range<usize>,
 }
 
 impl<'a> SrtpPacket<'a> {
-    fn new(data: &'a mut [u8]) -> Result<Self, Error> {
-        if data.len() < RtpHeader::SIZE {
-            return Err(Error::BadParam);
+    fn parse_base(data: &'a mut [u8]) -> Result<Self, Error> {
+        let mut r = OffsetReader::new(data);
+
+        // Parse the RTP header and CSRCs
+        let header = r.unpack::<RtpHeader>()?;
+        let csrc = r.read(4 * (header.cc as usize))?;
+
+        // Parse the extension header if present
+        let mut ext_header: Option<RtpExtensionHeader> = None;
+        let mut ext = 0..0;
+        if header.x == 1 {
+            let hdr = r.unpack::<RtpExtensionHeader>()?;
+            ext = r.read(4 * (hdr.length_u32 as usize))?;
+            ext_header = Some(hdr);
         }
 
-        // Parse header
-        let (header_data, data) = data.split_at_mut(RtpHeader::SIZE);
-        let header = RtpHeader::unpack_from_slice(header_data).expect("unpack error");
-
-        // Find the end of the CSRCs
-        let csrc_size = 4 * (header.cc as usize);
-        if data.len() < csrc_size {
-            return Err(Error::BadParam);
-        }
-        let (csrc_data, data) = data.split_at_mut(csrc_size);
-
-        // Find the end of the extension
-        if data.len() < RtpExtensionHeader::SIZE {
-            return Err(Error::BadParam);
-        }
-        let ext_header_data = &data[..RtpExtensionHeader::SIZE];
-        let ext_header =
-            RtpExtensionHeader::unpack_from_slice(ext_header_data).expect("unpack error");
-        let ext_size = RtpExtensionHeader::SIZE + 4 * (ext_header.length_u32 as usize);
-
-        if data.len() < ext_size {
-            return Err(Error::BadParam);
-        }
-        let (ext_data, data) = data.split_at_mut(ext_size);
+        // For now, we assume that the payload consumes the remainder
+        let payload = r.rest();
 
         Ok(SrtpPacket {
+            data: data,
             header: header,
-            csrcs: csrc_data,
-            extension: ext_data,
-            payload: data,
-            mki: None,
-            tag: None,
+            csrc: csrc,
+            ext_header: ext_header,
+            extension: ext,
+            payload: payload,
+            mki: 0..0,
+            tag: 0..0,
         })
     }
 
-    fn configure_mki_tag(&'a mut self, sk: &SessionKeys) -> Result<(), Error> {
+    // TODO(RLB): Allocate space for cipher overhead?
+    pub fn parse_for_encrypt(data: &'a mut [u8], sk: &SessionKeys) -> Result<Self, Error> {
+        let mut pkt = Self::parse_base(data)?;
+
         let tag_size = sk.rtp_auth.tag_size();
         let mki_size = sk.mki_id.len();
-        if self.payload.len() < mki_size + tag_size {
-            return Err(Error::BadParam);
-        }
+        let (payload, mki, tag) = pkt.split_payload(mki_size, tag_size)?;
 
-        let mki_start = self.payload.len() - tag_size - mki_size;
-        let (payload, mki_tag) = self.payload.split_at_mut(mki_start);
-        let (mki, tag) = mki_tag.split_at_mut(mki_size);
-        mki.copy_from_slice(sk.mki_id.as_slice());
-
-        self.payload = payload;
-        self.mki = Some(mki);
-        self.tag = Some(tag);
-        Ok(())
+        pkt.payload = payload;
+        pkt.mki = mki;
+        pkt.tag = tag;
+        Ok(pkt)
     }
 
-    fn find_master_key<'sk>(
-        &'a mut self,
+    pub fn parse_for_decrypt<'sk>(
+        data: &'a mut [u8],
         session_keys: &'sk Vec<SessionKeys>,
-    ) -> Option<&'sk SessionKeys> {
+    ) -> Result<(Self, &'sk SessionKeys), Error> {
+        let mut pkt = Self::parse_base(data)?;
+
         for sk in session_keys {
+            let mki_size = sk.mki_id.len();
             let tag_size = sk.rtp_auth.tag_size();
-            if self.payload.len() - tag_size < sk.mki_id.len() {
+            let (payload, mki, tag) = match pkt.split_payload(mki_size, tag_size) {
+                Ok(x) => x,
+                Err(err) => continue,
+            };
+
+            let possible_mki = &pkt.data[mki.clone()];
+            if possible_mki != sk.mki_id.as_slice() {
                 continue;
             }
 
-            let mki_size = sk.mki_id.len();
-            let mki_end = self.payload.len() - tag_size;
-            let mki_start = mki_end - sk.mki_id.len();
-            let possible_mki = &mut self.payload[mki_start..mki_end];
-            if possible_mki == sk.mki_id.as_slice() {
-                let (payload, mki_tag) = self.payload.split_at_mut(mki_start);
-                let (mki, tag) = mki_tag.split_at_mut(mki_size);
-
-                self.payload = payload;
-                self.mki = Some(mki);
-                self.tag = Some(tag);
-                return Some(sk);
-            }
+            // This is our MKI!
+            pkt.payload = payload;
+            pkt.mki = mki;
+            pkt.tag = tag;
+            return Ok((pkt, sk));
         }
-        None
+        Err(Error::BadParam)
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    fn split_payload(
+        &self,
+        mki_size: usize,
+        tag_size: usize,
+    ) -> Result<(Range<usize>, Range<usize>, Range<usize>), Error> {
+        let mut r = OffsetReader::new(self.payload());
+        if r.remaining() < mki_size + tag_size {
+            return Err(Error::BadParam);
+        }
 
-    #[test]
-    fn test_rtp_header() {
-        let packed = hex::decode("8c0f1234decafbadcafebabe").expect("hex decode");
-        let header = RtpHeader::unpack_from_slice(&packed).expect("unpack error");
-        assert_eq!(header.v, 2);
-        assert_eq!(header.p, 0);
-        assert_eq!(header.x, 0);
-        assert_eq!(header.cc, 0x0c);
-        assert_eq!(header.m, 0);
-        assert_eq!(header.pt, 0x0f);
-        assert_eq!(header.seq, 0x1234);
-        assert_eq!(header.ts, 0xdecafbad);
-        assert_eq!(header.ssrc, 0xcafebabe);
+        let payload_size = r.remaining() - (mki_size + tag_size);
+        let payload = r.read(payload_size)?;
+        let mki = r.read(mki_size)?;
+        let tag = r.read(tag_size)?;
+        Ok((payload, mki, tag))
+    }
+
+    pub fn payload<'b>(&'b self) -> &'b [u8] {
+        &self.data[self.payload.clone()]
     }
 }
