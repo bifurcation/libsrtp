@@ -3,9 +3,8 @@ use crate::kdf::*;
 use crate::key_limit::*;
 use crate::policy::*;
 use crate::replay::*;
+use crate::rtp_header::SrtpPacket;
 use constant_time_eq::constant_time_eq;
-use core::iter::Iterator;
-use std::ops::Range;
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,7 +491,7 @@ impl Context {
         sk.rtp_cipher.set_iv(&nonce, CipherDirection::Encrypt)?;
         sk.rtp_cipher.set_aad(pkt.aad())?;
         let ct_size = sk.rtp_cipher.encrypt(pkt.payload(), pt_size)?;
-        pkt.set_payload_size(ct_size);
+        pkt.set_payload_size(ct_size)?;
 
         // Write the MKI
         pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
@@ -575,7 +574,7 @@ impl Context {
         sk.rtp_cipher.set_iv(&nonce, CipherDirection::Decrypt)?;
         sk.rtp_cipher.set_aad(pkt.aad())?;
         let pt_size = sk.rtp_cipher.decrypt(pkt.payload(), ct_size)?;
-        pkt.set_payload_size(pt_size);
+        pkt.set_payload_size(pt_size)?;
 
         Ok(pkt.size())
     }
@@ -585,83 +584,4 @@ impl Context {
 
     // TODO srtcp_unprotect
     // TODO srtcp_unprotect_mki
-}
-
-struct RtpExtensionReader<'a> {
-    data: &'a mut [u8],
-}
-
-impl<'a> RtpExtensionReader<'a> {
-    fn get<'b>(&'b mut self, range: Range<usize>) -> &'b mut [u8] {
-        &mut self.data[range]
-    }
-}
-
-impl<'a> Iterator for RtpExtensionReader<'a> {
-    type Item = Range<usize>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        None // TODO parse next extension
-    }
-}
-
-struct SrtpHeader {
-    ssrc: u32,
-}
-
-struct SrtpPacket {
-    header: SrtpHeader,
-}
-
-impl SrtpPacket {
-    fn new(data: &mut [u8], len: usize) -> Result<Self, Error> {
-        Err(Error::Fail) // TODO
-    }
-
-    fn find_mki<'b>(
-        &mut self,
-        session_keys: &'b mut Vec<SessionKeys>,
-    ) -> Option<&'b mut SessionKeys> {
-        None // TODO
-    }
-
-    fn extension(&mut self) -> RtpExtensionReader {
-        RtpExtensionReader { data: &mut [] } // TODO
-    }
-
-    fn aad<'b>(&'b self) -> &'b [u8] {
-        &[] // TODO
-    }
-
-    fn auth_data<'b>(&'b self) -> &'b [u8] {
-        &[] // TODO
-    }
-
-    fn payload<'b>(&'b mut self) -> &'b mut [u8] {
-        &mut [] // TODO
-    }
-
-    fn payload_size(&self) -> usize {
-        0 // TODO
-    }
-
-    fn set_payload_size(&mut self, size: usize) {
-        // TODO
-    }
-
-    fn append<'b>(&'b mut self, size: usize) -> Result<&'b mut [u8], Error> {
-        Err(Error::Fail) // TODO
-    }
-
-    fn last<'b>(&'b self, size: usize) -> Result<&'b [u8], Error> {
-        Err(Error::Fail) // TODO
-    }
-
-    fn strip(&mut self, size: usize) -> Result<(), Error> {
-        Err(Error::Fail) // TODO
-    }
-
-    fn size(&self) -> usize {
-        0 // TODO
-    }
 }
