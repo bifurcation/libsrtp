@@ -3,6 +3,9 @@ use crate::kdf::*;
 use crate::key_limit::*;
 use crate::policy::*;
 use crate::replay::*;
+use constant_time_eq::constant_time_eq;
+use core::iter::Iterator;
+use std::ops::Range;
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,39 +13,39 @@ pub enum Error {
     Ok = 0, // included for backward compatibility
 
     // TODO(RLB): During translation, we are promoting this as needed, to make sure we only end up with the set we need
-    Fail = 1,       // unspecified failure
-    BadParam = 2,   // unsupported parameter
-    InitFail = 5,   // couldn't initialize
-    Terminus = 6,   // can't process as much data as requested
-    CipherFail = 8, // cipher failure
-    ReplayFail = 9, // replay check failed (bad index)
-    ReplayOld = 10, // replay check failed (index too old)
-    AlgoFail = 11,  // algorithm failed test routine
-    NoSuchOp = 12,  // unsupported operation
-    NoContext = 13, // no appropriate context found
+    Fail = 1,        // unspecified failure
+    BadParam = 2,    // unsupported parameter
+    InitFail = 5,    // couldn't initialize
+    Terminus = 6,    // can't process as much data as requested
+    AuthFail = 7,    // authentication failure
+    CipherFail = 8,  // cipher failure
+    ReplayFail = 9,  // replay check failed (bad index)
+    ReplayOld = 10,  // replay check failed (index too old)
+    AlgoFail = 11,   // algorithm failed test routine
+    NoSuchOp = 12,   // unsupported operation
+    NoContext = 13,  // no appropriate context found
     KeyExpired = 15, // can't use key any more
+    BadMki = 25,     // error MKI present in packet is invalid
 
-                    /*
-                    alloc_fail = 3,     // couldn't allocate memory
-                    dealloc_fail = 4,   // couldn't deallocate properly
-                    auth_fail = 7,      // authentication failure
-                    cant_check = 14,    // unable to perform desired validation
-                    socket_err = 16,    // error in use of socket
-                    signal_err = 17,    // error in use POSIX signals
-                    nonce_bad = 18,     // nonce check failed
-                    read_fail = 19,     // couldn't read data
-                    write_fail = 20,    // couldn't write data
-                    parse_err = 21,     // error parsing data
-                    encode_err = 22,    // error encoding data
-                    semaphore_err = 23, // error while using semaphores
-                    pfkey_err = 24,     // error while using pfkey
-                    bad_mki = 25,       // error MKI present in packet is invalid
-                    pkt_idx_old = 26,   // packet index is too old to consider
-                    pkt_idx_adv = 27,   // packet index advanced, reset needed
-                    */
+                     /*
+                     alloc_fail = 3,     // couldn't allocate memory
+                     dealloc_fail = 4,   // couldn't deallocate properly
+                     cant_check = 14,    // unable to perform desired validation
+                     socket_err = 16,    // error in use of socket
+                     signal_err = 17,    // error in use POSIX signals
+                     nonce_bad = 18,     // nonce check failed
+                     read_fail = 19,     // couldn't read data
+                     write_fail = 20,    // couldn't write data
+                     parse_err = 21,     // error parsing data
+                     encode_err = 22,    // error encoding data
+                     semaphore_err = 23, // error while using semaphores
+                     pfkey_err = 24,     // error while using pfkey
+                     pkt_idx_old = 26,   // packet index is too old to consider
+                     pkt_idx_adv = 27,   // packet index advanced, reset needed
+                     */
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 enum Direction {
     Unknown = 0,
     Sender = 1,
@@ -258,6 +261,22 @@ impl Stream {
 
         Ok(stream)
     }
+
+    pub fn get_session_keys(
+        &mut self,
+        use_mki: bool,
+        mki_index: usize,
+    ) -> Option<&mut SessionKeys> {
+        if !use_mki {
+            return Some(&mut self.session_keys[0]);
+        }
+
+        if mki_index > self.session_keys.len() {
+            return None;
+        }
+
+        Some(&mut self.session_keys[mki_index])
+    }
 }
 
 pub struct Context {
@@ -407,26 +426,242 @@ impl Context {
         Ok(())
     }
 
-    fn srtp_protect(&mut self, pkt: &[u8], pkt_len: usize) -> Result<usize, Error> {
-        self.srtp_protect_mki(pkt, pkt_len, false, 0)
+    fn srtp_protect(&mut self, pkt_data: &mut [u8], pkt_len: usize) -> Result<usize, Error> {
+        self.srtp_protect_mki(pkt_data, pkt_len, false, 0)
     }
 
     fn srtp_protect_mki(
         &mut self,
-        pkt: &[u8],
+        pkt_data: &mut [u8],
         pkt_len: usize,
         use_mki: bool,
-        mki: usize,
+        mki_index: usize,
     ) -> Result<usize, Error> {
-        Err(Error::Fail) // TODO
+        let mut pkt = SrtpPacket::new(pkt_data, pkt_len)?;
+
+        // Find or create the correct stream
+        let stream_index = match self.get_stream(pkt.header.ssrc) {
+            Some(x) => x,
+            None => {
+                if self.stream_template.is_none() {
+                    return Err(Error::NoContext);
+                }
+
+                let mut stream = self.stream_template.as_ref().unwrap().clone();
+                stream.direction = Direction::Sender;
+                self.streams.push(stream);
+                self.streams.len() - 1
+            }
+        };
+        let stream = &mut self.streams[stream_index];
+
+        // Check that the stream is for sending traffic
+        if stream.direction == Direction::Unknown {
+            stream.direction = Direction::Sender
+        } else if stream.direction != Direction::Sender {
+            return Err(Error::Fail); // TODO report ssrc collision
+        }
+
+        // Look up the session keys by MKI
+        let mut sk = match stream.get_session_keys(use_mki, mki_index) {
+            Some(x) => x,
+            None => return Err(Error::BadMki),
+        };
+
+        // Update the key usage limit
+        match sk.limit.update() {
+            KeyEvent::Normal => {}
+            KeyEvent::SoftLimit => { /* TODO report soft limit */ }
+            KeyEvent::HardLimit => {
+                // TODO report hard limit
+                return Err(Error::KeyExpired);
+            }
+        }
+
+        // TODO estimate sequence number and form nonce
+        let nonce = [0u8; 16];
+
+        // Encrypt the headers
+        for ext in pkt.extension() {
+            // TODO encrypt header extension
+        }
+
+        // Encrypt the payload
+        // TODO AEAD-ish
+        let pt_size = pkt.payload_size();
+        sk.rtp_cipher.set_iv(&nonce, CipherDirection::Encrypt)?;
+        sk.rtp_cipher.set_aad(pkt.aad())?;
+        let ct_size = sk.rtp_cipher.encrypt(pkt.payload(), pt_size)?;
+        pkt.set_payload_size(ct_size);
+
+        // Write the MKI
+        pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
+
+        // Write the tag
+        let mut tag = [0u8; 128]; // TODO fix some max size
+        let tag_size = sk.rtp_auth.tag_size();
+        sk.rtp_auth.compute(pkt.auth_data(), &mut tag)?;
+        pkt.append(tag_size)?.copy_from_slice(&tag[..tag_size]);
+
+        Ok(pkt.size()) // TODO
     }
 
-    // TODO srtp_unprotect
-    // TODO srtp_unprotect_mki
+    fn srtp_unprotect(&mut self, pkt_data: &mut [u8]) -> Result<usize, Error> {
+        self.srtp_unprotect_mki(pkt_data, false)
+    }
+
+    fn srtp_unprotect_mki(&mut self, pkt_data: &mut [u8], use_mki: bool) -> Result<usize, Error> {
+        let mut pkt = SrtpPacket::new(pkt_data, pkt_data.len())?;
+
+        // Get or create the stream
+        let stream = match self.get_stream(pkt.header.ssrc) {
+            Some(x) => &mut self.streams[x],
+            None => {
+                if self.stream_template.is_none() {
+                    return Err(Error::NoContext);
+                }
+
+                self.stream_template.as_mut().unwrap()
+            }
+        };
+
+        // Verify that stream is for received traffic
+        if stream.direction == Direction::Unknown {
+            stream.direction = Direction::Receiver;
+        }
+
+        if stream.direction != Direction::Receiver {
+            // TODO report SSRC collision
+            return Err(Error::Fail);
+        }
+
+        // TODO estimate the sequence number and form the nonce
+        let nonce = [0u8; 16];
+
+        // Determine if MKI is being used and what session keys should be used
+        let sk = if use_mki {
+            pkt.find_mki(&mut stream.session_keys)
+                .ok_or(Error::BadMki)?
+        } else {
+            &mut stream.session_keys[0]
+        };
+
+        // Verify the authentication tag
+        let mut tag_buf = [0u8; 128]; // TODO fix some max size
+        let tag_size = sk.rtp_auth.tag_size();
+        let tag = &mut tag_buf[..tag_size];
+        sk.rtp_auth.compute(pkt.auth_data(), tag)?;
+        if !constant_time_eq(tag, pkt.last(tag_size)?) {
+            return Err(Error::AuthFail);
+        }
+
+        // TODO update usage limits
+        // TODO convert to real stream
+        // TODO update replay DB
+
+        // Strip the auth tag and MKI
+        pkt.strip(tag_size)?;
+        if use_mki {
+            pkt.strip(sk.mki_id.len())?;
+        }
+
+        // Decrypt the headers
+        for ext in pkt.extension() {
+            // TODO encrypt header extension
+        }
+
+        // Decrypt the payload
+        let ct_size = pkt.payload_size();
+        sk.rtp_cipher.set_iv(&nonce, CipherDirection::Decrypt)?;
+        sk.rtp_cipher.set_aad(pkt.aad())?;
+        let pt_size = sk.rtp_cipher.decrypt(pkt.payload(), ct_size)?;
+        pkt.set_payload_size(pt_size);
+
+        Ok(pkt.size())
+    }
 
     // TODO srtcp_protect
     // TODO srtcp_protect_mki
 
     // TODO srtcp_unprotect
     // TODO srtcp_unprotect_mki
+}
+
+struct RtpExtensionReader<'a> {
+    data: &'a mut [u8],
+}
+
+impl<'a> RtpExtensionReader<'a> {
+    fn get<'b>(&'b mut self, range: Range<usize>) -> &'b mut [u8] {
+        &mut self.data[range]
+    }
+}
+
+impl<'a> Iterator for RtpExtensionReader<'a> {
+    type Item = Range<usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None // TODO parse next extension
+    }
+}
+
+struct SrtpHeader {
+    ssrc: u32,
+}
+
+struct SrtpPacket {
+    header: SrtpHeader,
+}
+
+impl SrtpPacket {
+    fn new(data: &mut [u8], len: usize) -> Result<Self, Error> {
+        Err(Error::Fail) // TODO
+    }
+
+    fn find_mki<'b>(
+        &mut self,
+        session_keys: &'b mut Vec<SessionKeys>,
+    ) -> Option<&'b mut SessionKeys> {
+        None // TODO
+    }
+
+    fn extension(&mut self) -> RtpExtensionReader {
+        RtpExtensionReader { data: &mut [] } // TODO
+    }
+
+    fn aad<'b>(&'b self) -> &'b [u8] {
+        &[] // TODO
+    }
+
+    fn auth_data<'b>(&'b self) -> &'b [u8] {
+        &[] // TODO
+    }
+
+    fn payload<'b>(&'b mut self) -> &'b mut [u8] {
+        &mut [] // TODO
+    }
+
+    fn payload_size(&self) -> usize {
+        0 // TODO
+    }
+
+    fn set_payload_size(&mut self, size: usize) {
+        // TODO
+    }
+
+    fn append<'b>(&'b mut self, size: usize) -> Result<&'b mut [u8], Error> {
+        Err(Error::Fail) // TODO
+    }
+
+    fn last<'b>(&'b self, size: usize) -> Result<&'b [u8], Error> {
+        Err(Error::Fail) // TODO
+    }
+
+    fn strip(&mut self, size: usize) -> Result<(), Error> {
+        Err(Error::Fail) // TODO
+    }
+
+    fn size(&self) -> usize {
+        0 // TODO
+    }
 }
