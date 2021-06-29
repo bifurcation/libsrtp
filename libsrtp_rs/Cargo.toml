@@ -23,3 +23,7 @@ cpu-time = "1.0.0"         # For cipher performance testing in C interface
 rand = "0.8.3"             # For rand_for_tests functions
 packed_struct = "0.5"      # For RTP header parsing
 constant_time_eq = "0.1.5" # For auth tag checking
+sha-1 = "0.9.6"            # Default, pure-Rust crypto
+hmac = "0.11.0"            # Default, pure-Rust crypto
+aes = "0.7.4"              # Default, pure-Rust crypto
+ctr = "0.7.0"              # Default, pure-Rust crypto

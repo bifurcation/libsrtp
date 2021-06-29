@@ -179,8 +179,7 @@ impl CryptoKernel {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::aes::KeySize;
-    use crate::aes_icm::NativeAesIcm;
+    use crate::aes_icm::{KeySize, NativeAesIcm};
     use crate::hmac::NativeHMAC;
     use crate::null_auth::NullAuth;
     use crate::null_cipher::NullCipher;

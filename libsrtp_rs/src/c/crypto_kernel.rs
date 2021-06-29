@@ -9,7 +9,7 @@ use crate::c::err::{srtp_debug_module_t, srtp_err_reporting_init};
 use crate::srtp::Error;
 use std::os::raw::{c_char, c_int};
 
-use crate::aes::KeySize;
+use crate::aes_icm::KeySize;
 use crate::aes_icm::NativeAesIcm;
 use crate::crypto_kernel::{AuthTypeID, CipherTypeID, CryptoKernel};
 use crate::hmac::NativeHMAC;

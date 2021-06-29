@@ -1,35 +1,35 @@
-use crate::sha1;
-
+use sha1::{Digest, Sha1};
 use std::convert::TryFrom;
 use std::os::raw::c_int;
 use std::slice;
 
 #[no_mangle]
-pub extern "C" fn srtp_sha1_init(ctx: *mut sha1::Context) {
+pub extern "C" fn srtp_sha1_init(ctx: *mut Sha1) {
     unsafe {
-        *ctx = sha1::Context::new();
+        *ctx = Sha1::new();
     }
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_sha1_update(
-    ctx: *mut sha1::Context,
-    msg_ptr: *const u8,
-    octets_in_msg: c_int,
-) {
+pub extern "C" fn srtp_sha1_update(ctx: *mut Sha1, msg_ptr: *const u8, octets_in_msg: c_int) {
     unsafe {
         let msg_size = usize::try_from(octets_in_msg as i32).unwrap();
         let msg = slice::from_raw_parts(msg_ptr, msg_size);
-        (*ctx).update(&msg);
+        let h = ctx.as_mut().unwrap();
+
+        h.update(&msg);
     }
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_sha1_final(ctx: *mut sha1::Context, output_ptr: *mut u32) {
+pub extern "C" fn srtp_sha1_final(ctx: *mut Sha1, output_ptr: *mut u32) {
     unsafe {
         let output_u8 = output_ptr as *mut u8;
         let mut output_slice = slice::from_raw_parts_mut(output_u8, 20);
-        (*ctx).finalize(&mut output_slice);
+        let h = ctx.as_mut().unwrap();
+
+        let digest = h.finalize_reset();
+        output_slice.copy_from_slice(&digest);
     }
 }
 
@@ -39,8 +39,8 @@ mod tests {
 
     #[test]
     fn test_sha1_c() -> Result<(), hex::FromHexError> {
-        let mut ctx = sha1::Context::new();
-        let ctx_ptr: *mut sha1::Context = &mut ctx;
+        let mut ctx = Sha1::new();
+        let ctx_ptr: *mut Sha1 = &mut ctx;
 
         let msg: [u8; 4] = [0x9f, 0xc3, 0xfe, 0x08];
         let msg_len: c_int = 4;

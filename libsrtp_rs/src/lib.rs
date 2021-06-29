@@ -1,5 +1,4 @@
 // Rust-facing interfaces
-pub mod aes;
 pub mod aes_icm;
 pub mod crypto_kernel;
 pub mod crypto_test;
@@ -11,7 +10,6 @@ pub mod null_cipher;
 pub mod policy;
 pub mod replay;
 mod rtp_header;
-pub mod sha1;
 pub mod srtp;
 
 // C-facing interfaces

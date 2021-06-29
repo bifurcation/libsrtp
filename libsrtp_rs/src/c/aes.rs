@@ -1,3 +1,5 @@
+// XXX
+/*
 use crate::aes::EncryptionKey;
 use crate::srtp::Error;
 use std::os::raw::c_int;
@@ -24,3 +26,4 @@ pub extern "C" fn srtp_aes_expand_encryption_key(
     };
     Error::Ok
 }
+*/

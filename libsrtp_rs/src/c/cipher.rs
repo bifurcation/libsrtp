@@ -3,7 +3,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 
-use crate::aes;
+use crate::aes_icm;
 use crate::aes_icm::NativeAesIcm;
 use crate::c::err::srtp_debug_module_t;
 use crate::c::{just_error, zero_and_drop};
@@ -279,7 +279,7 @@ extern "C" fn aes_icm_128_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = NativeAesIcm::new(aes::KeySize::Aes128);
+    let cipher_type = NativeAesIcm::new(aes_icm::KeySize::Aes128);
     cipher_alloc(&cipher_type, &srtp_aes_icm_128, cp, key_len, tag_len)
 }
 
@@ -350,7 +350,7 @@ extern "C" fn aes_icm_256_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = NativeAesIcm::new(aes::KeySize::Aes256);
+    let cipher_type = NativeAesIcm::new(aes_icm::KeySize::Aes256);
     cipher_alloc(&cipher_type, &srtp_aes_icm_256, cp, key_len, tag_len)
 }
 

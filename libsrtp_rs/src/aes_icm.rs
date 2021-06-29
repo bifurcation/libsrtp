@@ -1,7 +1,28 @@
-use crate::aes;
+// XXX(RLB) RustCrypto offers AES-CTR implementations, but not for 16-bit counters.  If that
+// changes in the future, we should remove the CTR internals here.
+
 use crate::crypto_kernel::constants;
 use crate::crypto_kernel::{Cipher, CipherDirection, CipherType, CipherTypeID};
 use crate::srtp::Error;
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, NewBlockCipher};
+use aes::{Aes128, Aes192, Aes256, Block};
+
+#[derive(Debug, Clone, Copy)]
+pub enum KeySize {
+    Aes128 = 16,
+    Aes192 = 24,
+    Aes256 = 32,
+}
+
+impl KeySize {
+    fn with_salt(&self) -> usize {
+        match self {
+            KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
+            KeySize::Aes192 => constants::AES_ICM_192_KEY_LEN_WSALT,
+            KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,
+        }
+    }
+}
 
 fn xor_eq(a: &mut [u8], b: &[u8]) {
     for (b1, b2) in a.iter_mut().zip(b.iter()) {
@@ -9,29 +30,32 @@ fn xor_eq(a: &mut [u8], b: &[u8]) {
     }
 }
 
-struct Context {
+struct Context<C>
+where
+    C: BlockEncrypt + NewBlockCipher,
+{
     counter: u16,
     salt_block: [u8; 16],
     counter_block: [u8; 16],
     buffer: [u8; 16],
-    expanded_key: Option<aes::EncryptionKey>,
+    cipher: Option<C>,
     bytes_in_buffer: usize,
     key_size: usize,
 }
 
-impl Context {
-    fn new(key_size: aes::KeySize) -> Self {
+impl<C> Context<C>
+where
+    C: BlockEncrypt + NewBlockCipher,
+{
+    fn new(key_size: KeySize) -> Self {
         Context {
             counter: 0,
             salt_block: [0; 16],
             counter_block: [0; 16],
             buffer: [0; 16],
-            expanded_key: None,
+            cipher: None,
             bytes_in_buffer: 0,
-            key_size: match key_size {
-                aes::KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
-                aes::KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,
-            },
+            key_size: key_size.with_salt(),
         }
     }
 
@@ -42,18 +66,24 @@ impl Context {
         self.counter_block.fill(0);
     }
 
-    fn advance(&mut self) {
-        let enc = self.expanded_key.as_ref().unwrap();
+    fn advance(&mut self) -> Result<(), Error> {
+        let enc = self.cipher.as_ref().ok_or(Error::BadParam)?;
 
         self.counter_block[14..].copy_from_slice(&self.counter.to_be_bytes());
         self.buffer.copy_from_slice(&self.counter_block);
-        enc.encrypt(&mut self.buffer);
+
+        let block = GenericArray::from_mut_slice(&mut self.buffer);
+        enc.encrypt_block(block);
         self.bytes_in_buffer = self.buffer.len();
         self.counter += 1;
+        Ok(())
     }
 }
 
-impl Cipher for Context {
+impl<C> Cipher for Context<C>
+where
+    C: Clone + BlockEncrypt + NewBlockCipher + 'static,
+{
     fn key_size(&self) -> usize {
         self.key_size
     }
@@ -79,7 +109,7 @@ impl Cipher for Context {
 
         self.counter_block[..copy_len].copy_from_slice(salt);
 
-        self.expanded_key = Some(aes::EncryptionKey::new(base_key)?);
+        self.cipher = Some(C::new(base_key.into()));
         Ok(())
     }
 
@@ -103,10 +133,6 @@ impl Cipher for Context {
             return Err(Error::BadParam);
         }
 
-        if self.expanded_key.is_none() {
-            return Err(Error::CipherFail);
-        }
-
         if pt_size > 0xffff - (self.counter as usize) {
             return Err(Error::Terminus);
         }
@@ -126,7 +152,7 @@ impl Cipher for Context {
         let mut buf_start = self.bytes_in_buffer;
         let mut buf_end = buf_start + 16;
         while buf_start + 16 <= pt_size {
-            self.advance();
+            self.advance()?;
             xor_eq(&mut buf[buf_start..buf_end], &self.buffer);
 
             buf_start = buf_end;
@@ -134,7 +160,7 @@ impl Cipher for Context {
         }
 
         if buf_start < pt_size {
-            self.advance();
+            self.advance()?;
             let tail_size = pt_size - buf_start;
             xor_eq(&mut buf[buf_start..], &self.buffer[..tail_size]);
             self.bytes_in_buffer = self.buffer.len() - tail_size;
@@ -159,7 +185,7 @@ impl Cipher for Context {
             salt_block: self.salt_block,
             counter_block: [0; 16],
             buffer: [0; 16],
-            expanded_key: self.expanded_key.clone(),
+            cipher: self.cipher.clone(),
             bytes_in_buffer: 0,
             key_size: self.key_size,
         })
@@ -167,11 +193,11 @@ impl Cipher for Context {
 }
 
 pub struct NativeAesIcm {
-    key_size: aes::KeySize,
+    key_size: KeySize,
 }
 
 impl NativeAesIcm {
-    pub fn new(key_size: aes::KeySize) -> Self {
+    pub fn new(key_size: KeySize) -> Self {
         NativeAesIcm { key_size: key_size }
     }
 }
@@ -179,17 +205,14 @@ impl NativeAesIcm {
 impl CipherType for NativeAesIcm {
     fn id(&self) -> CipherTypeID {
         match self.key_size {
-            aes::KeySize::Aes128 => CipherTypeID::AesIcm128,
-            aes::KeySize::Aes256 => CipherTypeID::AesIcm256,
+            KeySize::Aes128 => CipherTypeID::AesIcm128,
+            KeySize::Aes192 => CipherTypeID::AesIcm192,
+            KeySize::Aes256 => CipherTypeID::AesIcm256,
         }
     }
 
     fn create(&self, key_len: usize, _tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
-        let correct_key_len = match self.key_size {
-            aes::KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
-            aes::KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,
-        };
-        if key_len != correct_key_len {
+        if key_len != self.key_size.with_salt() {
             return Err(Error::BadParam);
         }
 
@@ -201,7 +224,11 @@ impl CipherType for NativeAesIcm {
         }
         */
 
-        Ok(Box::new(Context::new(self.key_size)))
+        Ok(match self.key_size {
+            KeySize::Aes128 => Box::new(Context::<Aes128>::new(self.key_size)),
+            KeySize::Aes192 => Box::new(Context::<Aes192>::new(self.key_size)),
+            KeySize::Aes256 => Box::new(Context::<Aes256>::new(self.key_size)),
+        })
     }
 }
 
@@ -212,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_128() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(aes::KeySize::Aes128);
+        let cipher_type = NativeAesIcm::new(KeySize::Aes128);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm128);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;
@@ -222,8 +249,19 @@ mod tests {
     }
 
     #[test]
+    fn test_aes_icm_192() -> Result<(), Error> {
+        let cipher_type = NativeAesIcm::new(KeySize::Aes192);
+        assert_eq!(cipher_type.id(), CipherTypeID::AesIcm192);
+
+        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        assert!(tests_passed > 0);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_aes_icm_256() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(aes::KeySize::Aes256);
+        let cipher_type = NativeAesIcm::new(KeySize::Aes256);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm256);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;

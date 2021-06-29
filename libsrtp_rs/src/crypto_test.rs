@@ -27,9 +27,15 @@ impl CipherTest {
         encrypt_buffer.copy_from_slice(self.plaintext);
         let encrypt_len = cipher.encrypt(encrypt_buffer, encrypt_buffer.len())?;
         if encrypt_len != self.ciphertext.len() {
+            println!(
+                "encrypt len: {:?} != {:?}",
+                encrypt_len,
+                self.ciphertext.len()
+            );
             return Err(Error::AlgoFail);
         }
         if encrypt_buffer != self.ciphertext {
+            println!("encrypt: {:x?} != {:x?}", encrypt_buffer, self.ciphertext);
             return Err(Error::AlgoFail);
         }
 
@@ -42,9 +48,15 @@ impl CipherTest {
         decrypt_buffer.copy_from_slice(self.ciphertext);
         let decrypt_len = cipher.decrypt(decrypt_buffer, decrypt_buffer.len())?;
         if decrypt_len != self.plaintext.len() {
+            println!(
+                "encrypt len: {:?} != {:?}",
+                encrypt_len,
+                self.ciphertext.len()
+            );
             return Err(Error::AlgoFail);
         }
         if decrypt_buffer != self.plaintext {
+            println!("encrypt: {:x?} != {:x?}", decrypt_buffer, self.plaintext);
             return Err(Error::AlgoFail);
         }
 
@@ -52,7 +64,7 @@ impl CipherTest {
     }
 }
 
-const CIPHER_TEST_DATA: [CipherTest; 3] = [
+const CIPHER_TEST_DATA: [CipherTest; 4] = [
     CipherTest {
         id: CipherTypeID::Null,
         key: &[],
@@ -73,6 +85,21 @@ const CIPHER_TEST_DATA: [CipherTest; 3] = [
             0xe0, 0x3e, 0xad, 0x09, 0x35, 0xc9, 0x5e, 0x80, 0xe1, 0x66, 0xb1, 0x6d, 0xd9, 0x2b,
             0x4e, 0xb4, 0xd2, 0x35, 0x13, 0x16, 0x2b, 0x02, 0xd0, 0xf7, 0x2a, 0x43, 0xa2, 0xfe,
             0x4a, 0x5f, 0x97, 0xab,
+        ],
+    },
+    CipherTest {
+        id: CipherTypeID::AesIcm192,
+        key: &[
+            0xea, 0xb2, 0x34, 0x76, 0x4e, 0x51, 0x7b, 0x2d, 0x3d, 0x16, 0x0d, 0x58, 0x7d, 0x8c,
+            0x86, 0x21, 0x97, 0x40, 0xf6, 0x5f, 0x99, 0xb6, 0xbc, 0xf7, 0xf0, 0xf1, 0xf2, 0xf3,
+            0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+        ],
+        nonce: &[0; 16],
+        plaintext: &[0; 32],
+        ciphertext: &[
+            0x35, 0x09, 0x6c, 0xba, 0x46, 0x10, 0x02, 0x8d, 0xc1, 0xb5, 0x75, 0x03, 0x80, 0x4c,
+            0xe3, 0x7c, 0x5d, 0xe9, 0x86, 0x29, 0x1d, 0xcc, 0xe1, 0x61, 0xd5, 0x16, 0x5e, 0xc4,
+            0x56, 0x8f, 0x5c, 0x9a,
         ],
     },
     CipherTest {
