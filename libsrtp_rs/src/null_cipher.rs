@@ -21,7 +21,7 @@ impl Cipher for Context {
     }
 
     fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
-        Err(Error::NoSuchOp)
+        Ok(())
     }
 
     fn set_iv(&mut self, _iv: &[u8], _direction: CipherDirection) -> Result<(), Error> {
@@ -34,10 +34,6 @@ impl Cipher for Context {
 
     fn decrypt(&mut self, _buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
         Ok(ct_size)
-    }
-
-    fn get_tag(&mut self, _tag: &mut [u8]) -> Result<usize, Error> {
-        Err(Error::NoSuchOp)
     }
 
     fn clone_inner(&self) -> Box<dyn Cipher> {

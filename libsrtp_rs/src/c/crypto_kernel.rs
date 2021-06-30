@@ -9,8 +9,8 @@ use crate::c::err::{srtp_debug_module_t, srtp_err_reporting_init};
 use crate::srtp::Error;
 use std::os::raw::{c_char, c_int};
 
-use crate::aes_icm::KeySize;
 use crate::aes_icm::NativeAesIcm;
+use crate::crypto_kernel::constants::AesKeySize;
 use crate::crypto_kernel::{AuthTypeID, CipherTypeID, CryptoKernel};
 use crate::hmac::NativeHMAC;
 use crate::null_auth::NullAuth;
@@ -38,10 +38,10 @@ pub extern "C" fn srtp_crypto_kernel_init() -> Error {
     if let Err(err) = kernel.load_cipher_type(Box::new(NullCipher {})) {
         return err;
     }
-    if let Err(err) = kernel.load_cipher_type(Box::new(NativeAesIcm::new(KeySize::Aes128))) {
+    if let Err(err) = kernel.load_cipher_type(Box::new(NativeAesIcm::new(AesKeySize::Aes128))) {
         return err;
     }
-    if let Err(err) = kernel.load_cipher_type(Box::new(NativeAesIcm::new(KeySize::Aes256))) {
+    if let Err(err) = kernel.load_cipher_type(Box::new(NativeAesIcm::new(AesKeySize::Aes256))) {
         return err;
     }
 

@@ -1,4 +1,5 @@
 // Rust-facing interfaces
+pub mod aes_gcm;
 pub mod aes_icm;
 pub mod crypto_kernel;
 pub mod crypto_test;

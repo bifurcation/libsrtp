@@ -8,6 +8,31 @@ use std::collections::HashMap;
 // Constants
 //
 pub mod constants {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AesKeySize {
+        Aes128 = 16,
+        Aes192 = 24,
+        Aes256 = 32,
+    }
+
+    impl AesKeySize {
+        pub fn icm_with_salt(&self) -> usize {
+            match self {
+                AesKeySize::Aes128 => AES_ICM_128_KEY_LEN_WSALT,
+                AesKeySize::Aes192 => AES_ICM_192_KEY_LEN_WSALT,
+                AesKeySize::Aes256 => AES_ICM_256_KEY_LEN_WSALT,
+            }
+        }
+
+        pub fn gcm_with_salt(&self) -> usize {
+            match self {
+                AesKeySize::Aes128 => AES_GCM_128_KEY_LEN_WSALT,
+                AesKeySize::Aes192 => AES_GCM_192_KEY_LEN_WSALT,
+                AesKeySize::Aes256 => AES_GCM_256_KEY_LEN_WSALT,
+            }
+        }
+    }
+
     pub const SALT_LEN: usize = 14;
     pub const AEAD_SALT_LEN: usize = 12;
 
@@ -18,6 +43,10 @@ pub mod constants {
     pub const AES_ICM_128_KEY_LEN_WSALT: usize = SALT_LEN + AES_128_KEY_LEN;
     pub const AES_ICM_192_KEY_LEN_WSALT: usize = SALT_LEN + AES_192_KEY_LEN;
     pub const AES_ICM_256_KEY_LEN_WSALT: usize = SALT_LEN + AES_256_KEY_LEN;
+
+    pub const AES_GCM_128_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_128_KEY_LEN;
+    pub const AES_GCM_192_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_192_KEY_LEN;
+    pub const AES_GCM_256_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_256_KEY_LEN;
 }
 
 //
@@ -61,7 +90,6 @@ pub trait Cipher {
     fn set_iv(&mut self, iv: &[u8], direction: CipherDirection) -> Result<(), Error>;
     fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
     fn decrypt(&mut self, buf: &mut [u8], ct_size: usize) -> Result<usize, Error>;
-    fn get_tag(&mut self, tag: &mut [u8]) -> Result<usize, Error>;
 
     // XXX(RLB): These methods are required to support cloning of SRTP streams.  Right now, Cipher
     // objects are not suitable for shared usage (Rc / Arc) because (a) doing anything with them
@@ -178,8 +206,9 @@ impl CryptoKernel {
 
 #[cfg(test)]
 mod test {
+    use super::constants::AesKeySize;
     use super::*;
-    use crate::aes_icm::{KeySize, NativeAesIcm};
+    use crate::aes_icm::NativeAesIcm;
     use crate::hmac::NativeHMAC;
     use crate::null_auth::NullAuth;
     use crate::null_cipher::NullCipher;
@@ -190,8 +219,8 @@ mod test {
 
         // Cipher types
         kernel.load_cipher_type(Box::new(NullCipher {}))?;
-        kernel.load_cipher_type(Box::new(NativeAesIcm::new(KeySize::Aes128)))?;
-        kernel.load_cipher_type(Box::new(NativeAesIcm::new(KeySize::Aes256)))?;
+        kernel.load_cipher_type(Box::new(NativeAesIcm::new(AesKeySize::Aes128)))?;
+        kernel.load_cipher_type(Box::new(NativeAesIcm::new(AesKeySize::Aes256)))?;
 
         // Auth types
         kernel.load_auth_type(Box::new(NullAuth {}))?;

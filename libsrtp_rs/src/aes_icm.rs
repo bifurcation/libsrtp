@@ -2,27 +2,11 @@
 // changes in the future, we should remove the CTR internals here.
 
 use crate::crypto_kernel::constants;
+use crate::crypto_kernel::constants::AesKeySize;
 use crate::crypto_kernel::{Cipher, CipherDirection, CipherType, CipherTypeID};
 use crate::srtp::Error;
 use aes::cipher::{generic_array::GenericArray, BlockEncrypt, NewBlockCipher};
-use aes::{Aes128, Aes192, Aes256, Block};
-
-#[derive(Debug, Clone, Copy)]
-pub enum KeySize {
-    Aes128 = 16,
-    Aes192 = 24,
-    Aes256 = 32,
-}
-
-impl KeySize {
-    fn with_salt(&self) -> usize {
-        match self {
-            KeySize::Aes128 => constants::AES_ICM_128_KEY_LEN_WSALT,
-            KeySize::Aes192 => constants::AES_ICM_192_KEY_LEN_WSALT,
-            KeySize::Aes256 => constants::AES_ICM_256_KEY_LEN_WSALT,
-        }
-    }
-}
+use aes::{Aes128, Aes192, Aes256};
 
 fn xor_eq(a: &mut [u8], b: &[u8]) {
     for (b1, b2) in a.iter_mut().zip(b.iter()) {
@@ -47,7 +31,7 @@ impl<C> Context<C>
 where
     C: BlockEncrypt + NewBlockCipher,
 {
-    fn new(key_size: KeySize) -> Self {
+    fn new(key_size: AesKeySize) -> Self {
         Context {
             counter: 0,
             salt_block: [0; 16],
@@ -55,7 +39,7 @@ where
             buffer: [0; 16],
             cipher: None,
             bytes_in_buffer: 0,
-            key_size: key_size.with_salt(),
+            key_size: key_size.icm_with_salt(),
         }
     }
 
@@ -114,7 +98,7 @@ where
     }
 
     fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
-        Err(Error::NoSuchOp)
+        Ok(())
     }
 
     fn set_iv(&mut self, iv: &[u8], _direction: CipherDirection) -> Result<(), Error> {
@@ -175,10 +159,6 @@ where
         self.encrypt(buf, ct_size)
     }
 
-    fn get_tag(&mut self, _tag: &mut [u8]) -> Result<usize, Error> {
-        Err(Error::NoSuchOp)
-    }
-
     fn clone_inner(&self) -> Box<dyn Cipher> {
         Box::new(Context {
             counter: 0,
@@ -193,11 +173,11 @@ where
 }
 
 pub struct NativeAesIcm {
-    key_size: KeySize,
+    key_size: AesKeySize,
 }
 
 impl NativeAesIcm {
-    pub fn new(key_size: KeySize) -> Self {
+    pub fn new(key_size: AesKeySize) -> Self {
         NativeAesIcm { key_size: key_size }
     }
 }
@@ -205,14 +185,14 @@ impl NativeAesIcm {
 impl CipherType for NativeAesIcm {
     fn id(&self) -> CipherTypeID {
         match self.key_size {
-            KeySize::Aes128 => CipherTypeID::AesIcm128,
-            KeySize::Aes192 => CipherTypeID::AesIcm192,
-            KeySize::Aes256 => CipherTypeID::AesIcm256,
+            AesKeySize::Aes128 => CipherTypeID::AesIcm128,
+            AesKeySize::Aes192 => CipherTypeID::AesIcm192,
+            AesKeySize::Aes256 => CipherTypeID::AesIcm256,
         }
     }
 
     fn create(&self, key_len: usize, _tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
-        if key_len != self.key_size.with_salt() {
+        if key_len != self.key_size.icm_with_salt() {
             return Err(Error::BadParam);
         }
 
@@ -225,9 +205,9 @@ impl CipherType for NativeAesIcm {
         */
 
         Ok(match self.key_size {
-            KeySize::Aes128 => Box::new(Context::<Aes128>::new(self.key_size)),
-            KeySize::Aes192 => Box::new(Context::<Aes192>::new(self.key_size)),
-            KeySize::Aes256 => Box::new(Context::<Aes256>::new(self.key_size)),
+            AesKeySize::Aes128 => Box::new(Context::<Aes128>::new(self.key_size)),
+            AesKeySize::Aes192 => Box::new(Context::<Aes192>::new(self.key_size)),
+            AesKeySize::Aes256 => Box::new(Context::<Aes256>::new(self.key_size)),
         })
     }
 }
@@ -239,7 +219,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_128() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(KeySize::Aes128);
+        let cipher_type = NativeAesIcm::new(AesKeySize::Aes128);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm128);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;
@@ -250,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_192() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(KeySize::Aes192);
+        let cipher_type = NativeAesIcm::new(AesKeySize::Aes192);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm192);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;
@@ -261,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_256() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(KeySize::Aes256);
+        let cipher_type = NativeAesIcm::new(AesKeySize::Aes256);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm256);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;

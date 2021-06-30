@@ -3,10 +3,10 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 
-use crate::aes_icm;
 use crate::aes_icm::NativeAesIcm;
 use crate::c::err::srtp_debug_module_t;
 use crate::c::{just_error, zero_and_drop};
+use crate::crypto_kernel::constants::AesKeySize;
 use crate::crypto_kernel::{Cipher, CipherDirection, CipherType, CipherTypeID};
 use crate::null_cipher::NullCipher;
 use crate::srtp::Error;
@@ -217,17 +217,7 @@ extern "C" fn cipher_set_iv(
 }
 
 extern "C" fn cipher_get_tag(state: *mut Box<dyn Cipher>, tag: *mut u8, len: *mut u32) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap() };
-    let tag_size = unsafe { len.read() as usize };
-    let tag_slice = unsafe { std::slice::from_raw_parts_mut(tag, tag_size) };
-
-    match cipher.get_tag(tag_slice) {
-        Ok(len_out) => {
-            unsafe { len.write(len_out as c_uint) };
-            Error::Ok
-        }
-        Err(err) => err,
-    }
+    Error::Ok
 }
 
 //
@@ -279,7 +269,7 @@ extern "C" fn aes_icm_128_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = NativeAesIcm::new(aes_icm::KeySize::Aes128);
+    let cipher_type = NativeAesIcm::new(AesKeySize::Aes128);
     cipher_alloc(&cipher_type, &srtp_aes_icm_128, cp, key_len, tag_len)
 }
 
@@ -350,7 +340,7 @@ extern "C" fn aes_icm_256_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = NativeAesIcm::new(aes_icm::KeySize::Aes256);
+    let cipher_type = NativeAesIcm::new(AesKeySize::Aes256);
     cipher_alloc(&cipher_type, &srtp_aes_icm_256, cp, key_len, tag_len)
 }
 
