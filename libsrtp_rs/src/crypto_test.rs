@@ -21,46 +21,34 @@ impl CipherTest {
         let ct_size = self.ciphertext.len();
 
         // Encrypt
-        println!("Check");
         cipher.init(&self.key)?;
-        println!("Check");
         cipher.set_iv(&self.nonce, CipherDirection::Encrypt)?;
-        println!("Check");
         cipher.set_aad(&self.aad)?;
 
-        println!("Check");
         let mut encrypt_vec = vec![0u8; ct_size];
         let encrypt_buffer = encrypt_vec.as_mut_slice();
         encrypt_buffer[..pt_size].copy_from_slice(self.plaintext);
         let encrypt_len = cipher.encrypt(encrypt_buffer, pt_size)?;
         if encrypt_len != ct_size {
-            println!("encrypt len: {:?} != {:?}", encrypt_len, ct_size);
             return Err(Error::AlgoFail);
         }
         if encrypt_buffer != self.ciphertext {
-            println!("encrypt: {:x?} != {:x?}", encrypt_buffer, self.ciphertext);
             return Err(Error::AlgoFail);
         }
 
         // Decrypt
-        println!("Check");
         cipher.init(&self.key)?;
-        println!("Check");
         cipher.set_iv(&self.nonce, CipherDirection::Decrypt)?;
-        println!("Check");
         cipher.set_aad(&self.aad)?;
 
-        println!("Check");
         let mut decrypt_vec = vec![0u8; ct_size];
         let decrypt_buffer = decrypt_vec.as_mut_slice();
         decrypt_buffer.copy_from_slice(self.ciphertext);
         let decrypt_len = cipher.decrypt(decrypt_buffer, decrypt_buffer.len())?;
         if decrypt_len != pt_size {
-            println!("encrypt len: {:?} != {:?}", encrypt_len, pt_size);
             return Err(Error::AlgoFail);
         }
         if &decrypt_buffer[..pt_size] != self.plaintext {
-            println!("encrypt: {:x?} != {:x?}", decrypt_buffer, self.plaintext);
             return Err(Error::AlgoFail);
         }
 
