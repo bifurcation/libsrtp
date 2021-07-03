@@ -68,7 +68,7 @@
 
 /* the debug module for srtp */
 srtp_debug_module_t mod_srtp = {
-    0,     /* debugging is off by default */
+    1,     /* debugging is off by default */
     "srtp" /* printable name for module */
 };
 
