@@ -351,6 +351,10 @@ if(TEST_APPS)
   target_link_libraries(srtp_driver srtp2)
   add_test(srtp_driver srtp_driver -v)
 
+  add_executable(vector_driver test/vector_driver.c test/util.c )
+  target_link_libraries(vector_driver srtp2)
+  add_test(vector_driver vector_driver -v)
+
   if(NOT (BUILD_SHARED_LIBS AND WIN32))
     add_executable(test_srtp test/test_srtp.c)
     if (ENABLE_RUST)
