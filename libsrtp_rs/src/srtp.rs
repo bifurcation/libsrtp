@@ -120,15 +120,15 @@ impl SessionKeys {
         let mut kdf = KDF::new(kernel, &kdf_key[..kdf_key_size])?;
 
         // Initialize RTP cipher
-        let mut tmp_key = [0u8; MAX_SRTP_KEY_SIZE];
-        kdf.generate(KdfLabel::RtpEncryption, &mut tmp_key[..rtp_base_key_size])?;
-        kdf.generate(
-            KdfLabel::RtpSalt,
-            &mut tmp_key[rtp_base_key_size..rtp_key_size],
-        )?;
+        {
+            let key = kdf.generate(KdfLabel::RtpEncryption, rtp_key_size)?;
+            println!("cipher key: {:x?}", key);
+            rtp_cipher.init(key)?;
+        }
 
-        rtp_cipher.init(&tmp_key[..rtp_key_size])?;
-        let salt = tmp_key[rtp_base_key_size..rtp_key_size].to_vec();
+        let rtp_salt_size = rtp_key_size - rtp_base_key_size;
+        let salt = kdf.generate(KdfLabel::RtpSalt, rtp_salt_size)?.to_vec();
+        println!("cipher salt: {:x?}", &salt);
 
         // Initialize RTP extension header cipher
         // TODO(RLB): This might require adaptation to use a different KDF for GCM ciphers (?)
@@ -138,43 +138,41 @@ impl SessionKeys {
         let xtn_hdr_key_size = rtp_cipher.key_size();
         let xtn_hdr_base_key_size = base_key_size(xtn_hdr_cipher_type, xtn_hdr_key_size);
 
-        tmp_key = [0u8; MAX_SRTP_KEY_SIZE];
-        kdf.generate(
-            KdfLabel::RtpHeaderEncryption,
-            &mut tmp_key[..xtn_hdr_base_key_size],
-        )?;
-        kdf.generate(
-            KdfLabel::RtpHeaderSalt,
-            &mut tmp_key[xtn_hdr_base_key_size..xtn_hdr_key_size],
-        )?;
+        {
+            let key = kdf.generate(KdfLabel::RtpHeaderEncryption, xtn_hdr_key_size)?;
+            println!("extensions cipher key: {:x?}", key);
+            rtp_xtn_hdr_cipher.init(key)?;
+        }
 
-        rtp_xtn_hdr_cipher.init(&mut tmp_key[..xtn_hdr_key_size])?;
+        let ext_salt = kdf.generate(
+            KdfLabel::RtpHeaderSalt,
+            xtn_hdr_key_size - xtn_hdr_base_key_size,
+        )?;
+        println!("extensions cipher salt: {:x?}", ext_salt);
 
         // Initialize RTP authentication
-        tmp_key = [0u8; MAX_SRTP_KEY_SIZE];
         {
-            let auth_key = &mut tmp_key[..rtp_auth.key_size()];
-            kdf.generate(KdfLabel::RtpMsgAuth, auth_key)?;
-            rtp_auth.init(auth_key)?;
+            let key = kdf.generate(KdfLabel::RtpMsgAuth, rtp_auth.key_size())?;
+            println!("auth key: {:x?}", key);
+            rtp_auth.init(key)?;
         }
 
         // Initialize RTCP encryption
-        let mut tmp_key = [0u8; MAX_SRTP_KEY_SIZE];
-        kdf.generate(KdfLabel::RtcpEncryption, &mut tmp_key[..rtcp_base_key_size])?;
-        kdf.generate(
-            KdfLabel::RtcpSalt,
-            &mut tmp_key[rtcp_base_key_size..rtcp_key_size],
-        )?;
+        {
+            let key = kdf.generate(KdfLabel::RtcpEncryption, rtcp_key_size)?;
+            println!("rtcp cipher key: {:x?}", key);
+            rtcp_cipher.init(key)?;
+        }
 
-        rtcp_cipher.init(&tmp_key[..rtcp_key_size])?;
-        let c_salt = tmp_key[rtcp_base_key_size..rtcp_key_size].to_vec();
+        let rtp_salt_size = rtcp_key_size - rtcp_base_key_size;
+        let c_salt = kdf.generate(KdfLabel::RtcpSalt, rtp_salt_size)?.to_vec();
+        println!("rtcp cipher salt: {:x?}", &c_salt);
 
         // Initialize RTCP authentication
-        tmp_key = [0u8; MAX_SRTP_KEY_SIZE];
         {
-            let auth_key = &mut tmp_key[..rtcp_auth.key_size()];
-            kdf.generate(KdfLabel::RtcpMsgAuth, auth_key)?;
-            rtcp_auth.init(auth_key)?;
+            let key = kdf.generate(KdfLabel::RtcpMsgAuth, rtcp_auth.key_size())?;
+            println!("rtcp auth key: {:x?}", key);
+            rtcp_auth.init(key)?;
         }
 
         Ok(SessionKeys {
@@ -189,6 +187,32 @@ impl SessionKeys {
             mki_id: key.id.clone(),
             limit: KeyLimitContext::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_session_keys() -> Result<(), Error> {
+        // Verify that keys are derived in the same way as libsrtp in C
+        let kernel = CryptoKernel::default()?;
+        let key = MasterKey {
+            key: vec![
+                0xe1, 0xf9, 0x7a, 0x0d, 0x3e, 0x01, 0x8b, 0xe0, 0xd6, 0x4f, 0xa3, 0x2c, 0x06, 0xde,
+                0x41, 0x39, 0x0e, 0xc6, 0x75, 0xad, 0x49, 0x8a, 0xfe, 0xeb, 0xb6, 0x96, 0x0b, 0x3a,
+                0xab, 0xe6,
+            ],
+            id: vec![],
+        };
+        let rtp_policy = CryptoPolicy::rtp_default();
+        let rtcp_policy = CryptoPolicy::rtcp_default();
+
+        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtp_policy)?;
+        // TODO verify that the keys are right
+
+        Ok(())
     }
 }
 

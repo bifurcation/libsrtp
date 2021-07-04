@@ -54,15 +54,15 @@ pub struct CryptoPolicy {
 }
 
 impl CryptoPolicy {
-    fn rtp_default() -> Self {
+    pub fn rtp_default() -> Self {
         Self::aes_cm_128_hmac_sha1_80()
     }
 
-    fn rtcp_default() -> Self {
+    pub fn rtcp_default() -> Self {
         Self::aes_cm_128_hmac_sha1_80()
     }
 
-    fn null_cipher_null_auth() -> Self {
+    pub fn null_cipher_null_auth() -> Self {
         // Should only be used for testing
         Self {
             cipher_type: CipherTypeID::Null,
@@ -74,7 +74,7 @@ impl CryptoPolicy {
         }
     }
 
-    fn null_cipher_hmac_sha1_32() -> Self {
+    pub fn null_cipher_hmac_sha1_32() -> Self {
         // Corresponds to RFC 4568
         Self {
             cipher_type: CipherTypeID::Null,
@@ -86,7 +86,7 @@ impl CryptoPolicy {
         }
     }
 
-    fn null_cipher_hmac_sha1_80() -> Self {
+    pub fn null_cipher_hmac_sha1_80() -> Self {
         // Corresponds to RFC 4568
         Self {
             cipher_type: CipherTypeID::Null,
@@ -98,7 +98,7 @@ impl CryptoPolicy {
         }
     }
 
-    fn aes_cm_128_null_auth() -> Self {
+    pub fn aes_cm_128_null_auth() -> Self {
         // Corresponds to RFC 4568
         // note that this crypto policy is intended for SRTP, but not SRTCP
         Self {
@@ -111,7 +111,7 @@ impl CryptoPolicy {
         }
     }
 
-    fn aes_cm_128_hmac_sha1_32() -> Self {
+    pub fn aes_cm_128_hmac_sha1_32() -> Self {
         // Corresponds to RFC 4568
         // note that this crypto policy is intended for SRTP, but not SRTCP
         Self {
@@ -124,7 +124,7 @@ impl CryptoPolicy {
         }
     }
 
-    fn aes_cm_128_hmac_sha1_80() -> Self {
+    pub fn aes_cm_128_hmac_sha1_80() -> Self {
         // Corresponds to RFC 4568
         Self {
             cipher_type: CipherTypeID::AesIcm128,
@@ -136,19 +136,19 @@ impl CryptoPolicy {
         }
     }
 
-    fn aes_cm_192_null_auth() -> Self {
+    pub fn aes_cm_192_null_auth() -> Self {
         Self::null_cipher_null_auth() // TODO
     }
 
-    fn aes_cm_192_hmac_sha1_32() -> Self {
+    pub fn aes_cm_192_hmac_sha1_32() -> Self {
         Self::null_cipher_null_auth() // TODO
     }
 
-    fn aes_cm_192_hmac_sha1_80() -> Self {
+    pub fn aes_cm_192_hmac_sha1_80() -> Self {
         Self::null_cipher_null_auth() // TODO
     }
 
-    fn aes_cm_256_null_auth() -> Self {
+    pub fn aes_cm_256_null_auth() -> Self {
         // Corresponds to RFC 4568
         // note that this crypto policy is intended for SRTP, but not SRTCP
         Self {
@@ -161,7 +161,7 @@ impl CryptoPolicy {
         }
     }
 
-    fn aes_cm_256_hmac_sha1_32() -> Self {
+    pub fn aes_cm_256_hmac_sha1_32() -> Self {
         // Corresponds to RFC 4568
         // note that this crypto policy is intended for SRTP, but not SRTCP
         Self {
@@ -174,7 +174,7 @@ impl CryptoPolicy {
         }
     }
 
-    fn aes_cm_256_hmac_sha1_80() -> Self {
+    pub fn aes_cm_256_hmac_sha1_80() -> Self {
         // Corresponds to RFC 4568
         Self {
             cipher_type: CipherTypeID::AesIcm256,
@@ -186,15 +186,31 @@ impl CryptoPolicy {
         }
     }
 
-    fn aes_gcm_128() -> Self {
-        Self::null_cipher_null_auth() // TODO
+    pub fn aes_gcm_128() -> Self {
+        // Corresponds to RFC 7714
+        Self {
+            cipher_type: CipherTypeID::AesGcm128,
+            cipher_key_len: constants::AES_GCM_128_KEY_LEN_WSALT,
+            auth_type: AuthTypeID::Null,
+            auth_key_len: 0,
+            auth_tag_len: 0,
+            sec_serv: SecurityServices::ConfAndAuth,
+        }
     }
 
-    fn aes_gcm_256() -> Self {
-        Self::null_cipher_null_auth() // TODO
+    pub fn aes_gcm_256() -> Self {
+        // Corresponds to RFC 7714
+        Self {
+            cipher_type: CipherTypeID::AesGcm256,
+            cipher_key_len: constants::AES_GCM_256_KEY_LEN_WSALT,
+            auth_type: AuthTypeID::Null,
+            auth_key_len: 0,
+            auth_tag_len: 0,
+            sec_serv: SecurityServices::ConfAndAuth,
+        }
     }
 
-    fn from_profile_rtp(id: ProfileID) -> Self {
+    pub fn from_profile_rtp(id: ProfileID) -> Self {
         match id {
             ProfileID::Aes128CmSha180 => Self::aes_cm_128_hmac_sha1_80(),
             ProfileID::Aes128CmSha132 => Self::aes_cm_128_hmac_sha1_32(),
@@ -205,7 +221,7 @@ impl CryptoPolicy {
         }
     }
 
-    fn from_profile_rtcp(id: ProfileID) -> Self {
+    pub fn from_profile_rtcp(id: ProfileID) -> Self {
         match id {
             ProfileID::Aes128CmSha180 => Self::aes_cm_128_hmac_sha1_80(),
             ProfileID::Aes128CmSha132 => Self::aes_cm_128_hmac_sha1_32(),

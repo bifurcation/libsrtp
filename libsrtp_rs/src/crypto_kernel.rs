@@ -4,6 +4,12 @@ use num_enum::{IntoPrimitive, TryFromPrimitive}; // only for C interface
 use std::any::Any;
 use std::collections::HashMap;
 
+use crate::aes_gcm::NativeAesGcm;
+use crate::aes_icm::NativeAesIcm;
+use crate::hmac::NativeHMAC;
+use crate::null_auth::NullAuth;
+use crate::null_cipher::NullCipher;
+
 //
 // Constants
 //
@@ -167,6 +173,24 @@ impl CryptoKernel {
         }
     }
 
+    // XXX(RLB) We might not want this once we have crypto agility, but it's handy to have for now.
+    pub fn default() -> Result<CryptoKernel, Error> {
+        let mut kernel = CryptoKernel::new();
+
+        // Cipher types
+        kernel.load_cipher_type(Box::new(NullCipher {}))?;
+        kernel.load_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes128)))?;
+        kernel.load_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes192)))?;
+        kernel.load_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes256)))?;
+        kernel.load_cipher_type(Box::new(NativeAesGcm::new(constants::AesKeySize::Aes128)?))?;
+        kernel.load_cipher_type(Box::new(NativeAesGcm::new(constants::AesKeySize::Aes256)?))?;
+
+        // Auth types
+        kernel.load_auth_type(Box::new(NullAuth {}))?;
+        kernel.load_auth_type(Box::new(NativeHMAC {}))?;
+        Ok(kernel)
+    }
+
     pub fn load_cipher_type(&mut self, ct: Box<dyn CipherType>) -> Result<(), Error> {
         crypto_test::cipher(ct.as_ref())?;
         self.cipher_types.insert(ct.id(), ct);
@@ -215,17 +239,7 @@ mod test {
 
     #[test]
     fn test_load_native_types() -> Result<(), Error> {
-        let mut kernel = CryptoKernel::new();
-
-        // Cipher types
-        kernel.load_cipher_type(Box::new(NullCipher {}))?;
-        kernel.load_cipher_type(Box::new(NativeAesIcm::new(AesKeySize::Aes128)))?;
-        kernel.load_cipher_type(Box::new(NativeAesIcm::new(AesKeySize::Aes256)))?;
-
-        // Auth types
-        kernel.load_auth_type(Box::new(NullAuth {}))?;
-        kernel.load_auth_type(Box::new(NativeHMAC {}))?;
-
+        let _ = CryptoKernel::default()?;
         Ok(())
     }
 }

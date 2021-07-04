@@ -23,7 +23,7 @@ where
 {
     key_size: AesKeySize,
     key: [u8; 32],
-    nonce: [u8; 16],
+    salt: [u8; 14],
     cipher: Option<Ctr128BE<C>>,
 }
 
@@ -35,7 +35,7 @@ where
         Context {
             key_size: key_size,
             key: [0; 32],
-            nonce: [0; 16],
+            salt: [0; 14],
             cipher: None,
         }
     }
@@ -50,7 +50,7 @@ where
     }
 
     fn iv_size(&self) -> usize {
-        self.nonce.len()
+        16
     }
 
     fn init(&mut self, key: &[u8]) -> Result<(), Error> {
@@ -61,8 +61,8 @@ where
 
         let base_key_len = key_size_with_salt - constants::SALT_LEN;
         self.key[..base_key_len].copy_from_slice(&key[..base_key_len]);
-        self.nonce.fill(0);
-        self.nonce[..constants::SALT_LEN].copy_from_slice(&key[base_key_len..]);
+        self.salt.fill(0);
+        self.salt.copy_from_slice(&key[base_key_len..]);
 
         Ok(())
     }
@@ -72,15 +72,18 @@ where
     }
 
     fn set_iv(&mut self, iv: &[u8], _direction: CipherDirection) -> Result<(), Error> {
-        if iv.len() != self.nonce.len() {
+        if iv.len() != self.iv_size() {
             return Err(Error::BadParam);
         }
 
-        xor_eq(&mut self.nonce, &iv);
+        // Nonce = (salt << 16) ^ iv
+        let mut nonce = [0u8; 16];
+        nonce[0..self.salt.len()].copy_from_slice(&self.salt);
+        xor_eq(&mut nonce, &iv);
+
         let key_size = self.key_size.icm_with_salt() - constants::SALT_LEN;
         let key = &self.key[..key_size];
-        let nonce = &self.nonce;
-        let cipher = Ctr128BE::new(key.into(), nonce.into());
+        let cipher = Ctr128BE::new(key.into(), (&nonce).into());
         self.cipher = Some(cipher);
 
         Ok(())

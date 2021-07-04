@@ -6,15 +6,9 @@
 use crate::c::auth::{make_auth_t, srtp_auth_t};
 use crate::c::cipher::{make_cipher_t, srtp_cipher_t};
 use crate::c::err::{srtp_debug_module_t, srtp_err_reporting_init};
+use crate::crypto_kernel::{AuthTypeID, CipherTypeID, CryptoKernel};
 use crate::srtp::Error;
 use std::os::raw::{c_char, c_int};
-
-use crate::aes_icm::NativeAesIcm;
-use crate::crypto_kernel::constants::AesKeySize;
-use crate::crypto_kernel::{AuthTypeID, CipherTypeID, CryptoKernel};
-use crate::hmac::NativeHMAC;
-use crate::null_auth::NullAuth;
-use crate::null_cipher::NullCipher;
 
 static mut singleton_kernel: Option<CryptoKernel> = None;
 
@@ -32,26 +26,10 @@ pub extern "C" fn srtp_crypto_kernel_init() -> Error {
     }
 
     // Initialize the kernel
-    let mut kernel = CryptoKernel::new();
-
-    // Cipher types
-    if let Err(err) = kernel.load_cipher_type(Box::new(NullCipher {})) {
-        return err;
-    }
-    if let Err(err) = kernel.load_cipher_type(Box::new(NativeAesIcm::new(AesKeySize::Aes128))) {
-        return err;
-    }
-    if let Err(err) = kernel.load_cipher_type(Box::new(NativeAesIcm::new(AesKeySize::Aes256))) {
-        return err;
-    }
-
-    // Auth types
-    if let Err(err) = kernel.load_auth_type(Box::new(NullAuth {})) {
-        return err;
-    }
-    if let Err(err) = kernel.load_auth_type(Box::new(NativeHMAC {})) {
-        return err;
-    }
+    let mut kernel = match CryptoKernel::default() {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
 
     unsafe { singleton_kernel = Some(kernel) };
 
