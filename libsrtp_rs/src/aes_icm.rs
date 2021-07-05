@@ -1,14 +1,18 @@
 // XXX(RLB) RustCrypto offers AES-CTR implementations, but not for 16-bit counters.  If that
 // changes in the future, we should remove the CTR internals here.
 
-use crate::crypto_kernel::constants;
 use crate::crypto_kernel::constants::AesKeySize;
-use crate::crypto_kernel::{Cipher, CipherDirection, CipherType, CipherTypeID};
+use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
+use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
-use aes::cipher::{generic_array::typenum::U16, BlockCipher, BlockEncrypt, NewBlockCipher};
+use aes::cipher::{
+    generic_array::{typenum::U16, GenericArray},
+    BlockCipher, BlockEncrypt, NewBlockCipher,
+};
 use aes::{Aes128, Aes192, Aes256};
 use ctr::cipher::{NewCipher, StreamCipher};
 use ctr::Ctr128BE;
+use std::marker::PhantomData;
 
 fn xor_eq(a: &mut [u8], b: &[u8]) {
     for (b1, b2) in a.iter_mut().zip(b.iter()) {
@@ -24,20 +28,39 @@ where
     key_size: AesKeySize,
     key: [u8; 32],
     salt: [u8; 14],
-    cipher: Option<Ctr128BE<C>>,
+    phantom: PhantomData<C>,
 }
 
 impl<C> Context<C>
 where
     C: Clone + BlockEncrypt + BlockCipher<BlockSize = U16> + NewBlockCipher + 'static,
 {
-    fn new(key_size: AesKeySize) -> Self {
-        Context {
-            key_size: key_size,
-            key: [0; 32],
-            salt: [0; 14],
-            cipher: None,
+    fn new(key_size: AesKeySize, key: &[u8], salt: &[u8]) -> Result<Self, Error> {
+        let id = key_size.as_icm_id();
+        if key.len() != id.key_size() || salt.len() != id.salt_size() {
+            return Err(Error::BadParam);
         }
+
+        let mut ctx = Context {
+            key_size: key_size,
+            key: Default::default(),
+            salt: Default::default(),
+            phantom: PhantomData,
+        };
+
+        ctx.key_mut().copy_from_slice(key);
+        ctx.salt.copy_from_slice(salt);
+        Ok(ctx)
+    }
+
+    fn key(&self) -> &[u8] {
+        let key_size = self.id().key_size();
+        &self.key[..key_size]
+    }
+
+    fn key_mut(&mut self) -> &mut [u8] {
+        let key_size = self.id().key_size();
+        &mut self.key[..key_size]
     }
 }
 
@@ -45,61 +68,45 @@ impl<C> Cipher for Context<C>
 where
     C: Clone + BlockEncrypt + BlockCipher<BlockSize = U16> + NewBlockCipher + 'static,
 {
-    fn key_size(&self) -> usize {
-        self.key_size.icm_with_salt()
+    fn id(&self) -> CipherTypeID {
+        self.key_size.as_icm_id()
     }
 
-    fn iv_size(&self) -> usize {
-        16
+    fn rtp_nonce(
+        &self,
+        ssrc: u32,
+        ext_seq_num: ExtendedSequenceNumber,
+        nonce: &mut [u8],
+    ) -> Result<usize, Error> {
+        Err(Error::Fail) // TODO
     }
 
-    fn init(&mut self, key: &[u8]) -> Result<(), Error> {
-        let key_size_with_salt = self.key_size.icm_with_salt();
-        if key.len() != key_size_with_salt {
-            return Err(Error::BadParam);
-        }
-
-        let base_key_len = key_size_with_salt - constants::SALT_LEN;
-        self.key[..base_key_len].copy_from_slice(&key[..base_key_len]);
-        self.salt.fill(0);
-        self.salt.copy_from_slice(&key[base_key_len..]);
-
-        Ok(())
+    fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error> {
+        Err(Error::Fail) // TODO
     }
 
-    fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn set_iv(&mut self, iv: &[u8], _direction: CipherDirection) -> Result<(), Error> {
-        if iv.len() != self.iv_size() {
-            return Err(Error::BadParam);
-        }
-
-        // Nonce = (salt << 16) ^ iv
-        let mut nonce = [0u8; 16];
-        nonce[0..self.salt.len()].copy_from_slice(&self.salt);
-        xor_eq(&mut nonce, &iv);
-
-        let key_size = self.key_size.icm_with_salt() - constants::SALT_LEN;
-        let key = &self.key[..key_size];
-        let cipher = Ctr128BE::new(key.into(), (&nonce).into());
-        self.cipher = Some(cipher);
-
-        Ok(())
-    }
-
-    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
-        self.cipher
-            .as_mut()
-            .ok_or(Error::BadParam)?
+    fn encrypt(
+        &self,
+        nonce: &[u8],
+        _aad: &[u8],
+        buf: &mut [u8],
+        pt_size: usize,
+    ) -> Result<usize, Error> {
+        let key = GenericArray::from_slice(self.key());
+        Ctr128BE::<C>::new(&key, nonce.into())
             .try_apply_keystream(&mut buf[..pt_size])
             .map(|_| pt_size)
             .map_err(|_| Error::CipherFail)
     }
 
-    fn decrypt(&mut self, buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
-        self.encrypt(buf, ct_size)
+    fn decrypt(
+        &self,
+        nonce: &[u8],
+        aad: &[u8],
+        buf: &mut [u8],
+        ct_size: usize,
+    ) -> Result<usize, Error> {
+        self.encrypt(nonce, aad, buf, ct_size)
     }
 
     fn clone_inner(&self) -> Box<dyn Cipher> {
@@ -120,30 +127,14 @@ impl NativeAesIcm {
 
 impl CipherType for NativeAesIcm {
     fn id(&self) -> CipherTypeID {
-        match self.key_size {
-            AesKeySize::Aes128 => CipherTypeID::AesIcm128,
-            AesKeySize::Aes192 => CipherTypeID::AesIcm192,
-            AesKeySize::Aes256 => CipherTypeID::AesIcm256,
-        }
+        self.key_size.as_icm_id()
     }
 
-    fn create(&self, key_len: usize, _tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
-        if key_len != self.key_size.icm_with_salt() {
-            return Err(Error::BadParam);
-        }
-
-        // XXX(RLB): It seems like we should fail on this case, but the SRTP layer seems to think
-        // we should allow non-zero tag sizes
-        /*
-        if tag_len != 0 {
-            return Err(Error::BadParam);
-        }
-        */
-
+    fn create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn Cipher>, Error> {
         Ok(match self.key_size {
-            AesKeySize::Aes128 => Box::new(Context::<Aes128>::new(self.key_size)),
-            AesKeySize::Aes192 => Box::new(Context::<Aes192>::new(self.key_size)),
-            AesKeySize::Aes256 => Box::new(Context::<Aes256>::new(self.key_size)),
+            AesKeySize::Aes128 => Box::new(Context::<Aes128>::new(self.key_size, key, salt)?),
+            AesKeySize::Aes192 => Box::new(Context::<Aes192>::new(self.key_size, key, salt)?),
+            AesKeySize::Aes256 => Box::new(Context::<Aes256>::new(self.key_size, key, salt)?),
         })
     }
 }

@@ -14,4 +14,6 @@ mod rtp_header;
 pub mod srtp;
 
 // C-facing interfaces
-mod c;
+// XXX(RLB) Disabled for now, since the crypto interfaces have diverged so that they can be more
+// modern and idiomatic
+// mod c;

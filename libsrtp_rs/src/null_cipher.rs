@@ -1,38 +1,43 @@
-use crate::crypto_kernel::{Cipher, CipherDirection, CipherType, CipherTypeID};
+use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
+use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 
 struct Context;
 
 impl Cipher for Context {
-    fn key_size(&self) -> usize {
-        0
+    fn id(&self) -> CipherTypeID {
+        CipherTypeID::Null
     }
 
-    fn iv_size(&self) -> usize {
-        0
+    fn rtp_nonce(
+        &self,
+        ssrc: u32,
+        ext_seq_num: ExtendedSequenceNumber,
+        nonce: &mut [u8],
+    ) -> Result<usize, Error> {
+        Ok(0)
+    }
+    fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error> {
+        Ok(0)
     }
 
-    fn init(&mut self, key: &[u8]) -> Result<(), Error> {
-        if key.len() != 0 {
-            return Err(Error::BadParam);
-        }
-
-        Ok(())
-    }
-
-    fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn set_iv(&mut self, _iv: &[u8], _direction: CipherDirection) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn encrypt(&mut self, _buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+    fn encrypt(
+        &self,
+        nonce: &[u8],
+        aad: &[u8],
+        buf: &mut [u8],
+        pt_size: usize,
+    ) -> Result<usize, Error> {
         Ok(pt_size)
     }
 
-    fn decrypt(&mut self, _buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
+    fn decrypt(
+        &self,
+        nonce: &[u8],
+        aad: &[u8],
+        buf: &mut [u8],
+        ct_size: usize,
+    ) -> Result<usize, Error> {
         Ok(ct_size)
     }
 
@@ -48,14 +53,7 @@ impl CipherType for NullCipher {
         CipherTypeID::Null
     }
 
-    fn create(&self, _key_len: usize, _tag_len: usize) -> Result<Box<dyn Cipher>, Error> {
-        // XXX(RLB) It seems like we should do this check, but it is incompatible with SRTP tests.
-        /*
-        if key_len > 0 || tag_len > 0 {
-            return Err(Error::BadParam);
-        }
-        */
-
+    fn create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn Cipher>, Error> {
         Ok(Box::new(Context {}))
     }
 }

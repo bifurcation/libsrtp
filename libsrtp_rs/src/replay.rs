@@ -197,7 +197,6 @@ impl BitVector {
         };
         let word_size: usize = (window_bytes / Self::BYTES_PER_WORD) + extra_word;
 
-        println!("allocating {} words", word_size);
         Ok(Self {
             bit_length: window_bits,
             words: vec![0u64; word_size].into_boxed_slice(),

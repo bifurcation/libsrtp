@@ -251,6 +251,7 @@ pub struct Ssrc {
 
 pub struct MasterKey {
     pub key: Vec<u8>,
+    pub salt: Vec<u8>,
     pub id: Vec<u8>,
 }
 
@@ -260,7 +261,6 @@ pub struct Policy {
     pub ssrc: Ssrc,
     pub rtp: CryptoPolicy,
     pub rtcp: CryptoPolicy,
-    pub key: Option<Vec<u8>>,
     pub keys: Vec<MasterKey>,
     pub window_size: usize,
     pub allow_repeat_tx: bool,
@@ -269,11 +269,6 @@ pub struct Policy {
 
 impl Policy {
     pub fn validate_master_keys(&self) -> bool {
-        if let None = self.key {
-            if self.keys.is_empty() {
-                return false;
-            }
-        }
-        true
+        self.keys.is_empty()
     }
 }

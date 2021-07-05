@@ -2,31 +2,16 @@ use crate::crypto_kernel::{Auth, AuthType, AuthTypeID};
 use crate::srtp::Error;
 use std::any::Any;
 
-struct Context {
-    key_size: usize,
-    tag_size: usize,
-    prefix_size: usize,
-}
+#[derive(Clone)]
+struct Context;
 
 impl Auth for Context {
-    fn key_size(&self) -> usize {
-        self.key_size
-    }
-
     fn tag_size(&self) -> usize {
-        self.tag_size
+        0
     }
 
     fn prefix_size(&self) -> usize {
-        self.prefix_size
-    }
-
-    fn init(&mut self, key: &[u8]) -> Result<(), Error> {
-        if key.len() > 0 {
-            Err(Error::BadParam)
-        } else {
-            Ok(())
-        }
+        0
     }
 
     fn start(&mut self) -> Result<(), Error> {
@@ -39,18 +24,14 @@ impl Auth for Context {
 
     fn compute(&mut self, _message: &[u8], tag: &mut [u8]) -> Result<(), Error> {
         if tag.len() > 0 {
-            Err(Error::BadParam)
+            Err(Error::AuthFail)
         } else {
             Ok(())
         }
     }
 
     fn clone_inner(&self) -> Box<dyn Auth> {
-        Box::new(Context {
-            key_size: self.key_size,
-            tag_size: self.tag_size,
-            prefix_size: self.prefix_size,
-        })
+        Box::new(self.clone())
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -69,16 +50,12 @@ impl AuthType for NullAuth {
         AuthTypeID::Null
     }
 
-    fn create(&self, key_len: usize, out_len: usize) -> Result<Box<dyn Auth>, Error> {
-        if key_len > 0 || out_len > 0 {
+    fn create(&self, key: &[u8], tag_size: usize) -> Result<Box<dyn Auth>, Error> {
+        if key.len() > 0 || tag_size > 0 {
             return Err(Error::BadParam);
         }
 
-        Ok(Box::new(Context {
-            key_size: key_len,
-            tag_size: out_len,
-            prefix_size: out_len,
-        }))
+        Ok(Box::new(Context))
     }
 }
 

@@ -726,6 +726,9 @@ static srtp_err_status_t srtp_kdf_generate(srtp_kdf_t *kdf,
     if (status)
         return status;
 
+    debug_print(mod_srtp, "kdf iv: %s",
+                srtp_octet_string_hex_string(&nonce, 16));
+
     /* generate keystream output */
     octet_string_set_to_zero(key, length);
     status = srtp_cipher_encrypt(kdf->cipher, key, &length);

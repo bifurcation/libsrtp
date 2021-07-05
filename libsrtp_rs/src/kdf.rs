@@ -1,10 +1,10 @@
 use crate::crypto_kernel::constants;
-use crate::crypto_kernel::{Cipher, CipherDirection, CipherTypeID, CryptoKernel};
+use crate::crypto_kernel::{Cipher, CipherTypeID, CryptoKernel};
 use crate::srtp::Error;
 use num_enum::IntoPrimitive;
 
 #[repr(u8)]
-#[derive(IntoPrimitive)]
+#[derive(Copy, Clone, Debug, IntoPrimitive)]
 pub enum KdfLabel {
     RtpEncryption = 0x00,
     RtpMsgAuth = 0x01,
@@ -19,42 +19,48 @@ pub enum KdfLabel {
 const MAX_KDF_OUTPUT_SIZE: usize = 46;
 
 pub struct KDF {
-    iv: [u8; 16],
+    salt: [u8; 16],
     buffer: [u8; MAX_KDF_OUTPUT_SIZE],
     cipher: Box<dyn Cipher>,
 }
 
 impl KDF {
-    pub fn new(kernel: &CryptoKernel, key: &[u8]) -> Result<Self, Error> {
-        let cipher_id = match key.len() {
-            constants::AES_ICM_128_KEY_LEN_WSALT => CipherTypeID::AesIcm128,
-            constants::AES_ICM_192_KEY_LEN_WSALT => CipherTypeID::AesIcm192,
-            constants::AES_ICM_256_KEY_LEN_WSALT => CipherTypeID::AesIcm256,
-            _ => return Err(Error::BadParam),
-        };
-
-        let mut kdf = KDF {
-            iv: [0; 16],
-            buffer: [0; MAX_KDF_OUTPUT_SIZE],
-            cipher: kernel.cipher(cipher_id, key.len(), 0)?,
-        };
-
-        kdf.cipher.init(key)?;
-        Ok(kdf)
+    pub fn cipher_type(rtp: CipherTypeID, rtcp: CipherTypeID) -> CipherTypeID {
+        if rtp.key_size() <= constants::AES_128_KEY_LEN
+            && rtcp.key_size() <= constants::AES_128_KEY_LEN
+        {
+            CipherTypeID::AesIcm128
+        } else {
+            CipherTypeID::AesIcm256
+        }
     }
 
-    pub fn generate(&mut self, label: KdfLabel, size: usize) -> Result<&[u8], Error> {
-        if size > self.buffer.len() {
+    pub fn new(
+        kernel: &CryptoKernel,
+        cipher_id: CipherTypeID,
+        key: &[u8],
+        salt: &[u8],
+    ) -> Result<Self, Error> {
+        let mut kdf = KDF {
+            salt: [0; 16],
+            buffer: [0; MAX_KDF_OUTPUT_SIZE],
+            cipher: kernel.cipher(cipher_id, key, salt)?,
+        };
+
+        if salt.len() != constants::SALT_LEN {
             return Err(Error::BadParam);
         }
 
-        let output = &mut self.buffer[..size];
-        output.fill(0);
+        kdf.salt[..constants::SALT_LEN].copy_from_slice(salt);
+        Ok(kdf)
+    }
 
-        self.iv[7] = label.into();
-        println!("iv: {:02x?}", &self.iv);
-        self.cipher.set_iv(&self.iv, CipherDirection::Encrypt)?;
-        self.cipher.encrypt(output, output.len())?;
-        Ok(output)
+    pub fn generate(&self, label: KdfLabel, buffer: &mut [u8]) -> Result<(), Error> {
+        let mut nonce = self.salt;
+        let label_u8: u8 = label.into();
+        nonce[7] ^= label_u8;
+
+        self.cipher.encrypt(&nonce, &[], buffer, buffer.len())?;
+        Ok(())
     }
 }

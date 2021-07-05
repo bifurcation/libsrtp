@@ -1,6 +1,5 @@
 use crate::crypto_test;
 use crate::srtp::Error;
-use num_enum::{IntoPrimitive, TryFromPrimitive}; // only for C interface
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -9,11 +8,14 @@ use crate::aes_icm::NativeAesIcm;
 use crate::hmac::NativeHMAC;
 use crate::null_auth::NullAuth;
 use crate::null_cipher::NullCipher;
+use crate::replay::ExtendedSequenceNumber;
 
 //
 // Constants
 //
 pub mod constants {
+    use super::CipherTypeID;
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum AesKeySize {
         Aes128 = 16,
@@ -22,29 +24,48 @@ pub mod constants {
     }
 
     impl AesKeySize {
-        pub fn icm_with_salt(&self) -> usize {
+        pub fn as_usize(&self) -> usize {
             match self {
-                AesKeySize::Aes128 => AES_ICM_128_KEY_LEN_WSALT,
-                AesKeySize::Aes192 => AES_ICM_192_KEY_LEN_WSALT,
-                AesKeySize::Aes256 => AES_ICM_256_KEY_LEN_WSALT,
+                AesKeySize::Aes128 => AES_128_KEY_LEN,
+                AesKeySize::Aes192 => AES_192_KEY_LEN,
+                AesKeySize::Aes256 => AES_256_KEY_LEN,
             }
         }
 
-        pub fn gcm_with_salt(&self) -> usize {
+        pub fn as_icm_id(&self) -> CipherTypeID {
             match self {
-                AesKeySize::Aes128 => AES_GCM_128_KEY_LEN_WSALT,
-                AesKeySize::Aes192 => AES_GCM_192_KEY_LEN_WSALT,
-                AesKeySize::Aes256 => AES_GCM_256_KEY_LEN_WSALT,
+                AesKeySize::Aes128 => CipherTypeID::AesIcm128,
+                AesKeySize::Aes192 => CipherTypeID::AesIcm192,
+                AesKeySize::Aes256 => CipherTypeID::AesIcm256,
+            }
+        }
+
+        pub fn as_gcm_id(&self) -> CipherTypeID {
+            match self {
+                AesKeySize::Aes128 => CipherTypeID::AesGcm128,
+                AesKeySize::Aes192 => panic!("Invalid GCM key size"),
+                AesKeySize::Aes256 => CipherTypeID::AesGcm256,
             }
         }
     }
 
+    impl Into<usize> for AesKeySize {
+        fn into(self) -> usize {
+            self.as_usize()
+        }
+    }
+
+    pub const NULL_CIPHER_SALT_LEN: usize = 0;
     pub const SALT_LEN: usize = 14;
     pub const AEAD_SALT_LEN: usize = 12;
 
+    pub const NULL_CIPHER_KEY_LEN: usize = 0;
     pub const AES_128_KEY_LEN: usize = 16;
     pub const AES_192_KEY_LEN: usize = 24;
     pub const AES_256_KEY_LEN: usize = 32;
+
+    pub const NULL_AUTH_KEY_LEN: usize = 0;
+    pub const HMAC_SHA1_KEY_LEN: usize = 20;
 
     pub const AES_ICM_128_KEY_LEN_WSALT: usize = SALT_LEN + AES_128_KEY_LEN;
     pub const AES_ICM_192_KEY_LEN_WSALT: usize = SALT_LEN + AES_192_KEY_LEN;
@@ -69,33 +90,66 @@ pub enum CipherTypeID {
     AesGcm256 = 7,
 }
 
-pub const fn is_aead(id: CipherTypeID) -> bool {
-    match id {
-        CipherTypeID::Null => false,
-        CipherTypeID::AesIcm128 => false,
-        CipherTypeID::AesIcm192 => false,
-        CipherTypeID::AesIcm256 => false,
-        CipherTypeID::AesGcm128 => true,
-        CipherTypeID::AesGcm256 => true,
+impl CipherTypeID {
+    pub fn key_size(&self) -> usize {
+        match self {
+            CipherTypeID::Null => constants::NULL_CIPHER_KEY_LEN,
+            CipherTypeID::AesIcm128 => constants::AES_128_KEY_LEN,
+            CipherTypeID::AesIcm192 => constants::AES_192_KEY_LEN,
+            CipherTypeID::AesIcm256 => constants::AES_256_KEY_LEN,
+            CipherTypeID::AesGcm128 => constants::AES_128_KEY_LEN,
+            CipherTypeID::AesGcm256 => constants::AES_256_KEY_LEN,
+        }
+    }
+
+    pub fn salt_size(&self) -> usize {
+        match self {
+            CipherTypeID::Null => constants::NULL_CIPHER_SALT_LEN,
+            CipherTypeID::AesIcm128 => constants::SALT_LEN,
+            CipherTypeID::AesIcm192 => constants::SALT_LEN,
+            CipherTypeID::AesIcm256 => constants::SALT_LEN,
+            CipherTypeID::AesGcm128 => constants::AEAD_SALT_LEN,
+            CipherTypeID::AesGcm256 => constants::AEAD_SALT_LEN,
+        }
+    }
+
+    pub fn extension_header_cipher_type(&self) -> CipherTypeID {
+        match self {
+            CipherTypeID::Null => CipherTypeID::Null,
+            CipherTypeID::AesIcm128 => CipherTypeID::AesIcm128,
+            CipherTypeID::AesIcm192 => CipherTypeID::AesIcm192,
+            CipherTypeID::AesIcm256 => CipherTypeID::AesIcm256,
+            CipherTypeID::AesGcm128 => CipherTypeID::AesIcm128,
+            CipherTypeID::AesGcm256 => CipherTypeID::AesIcm256,
+        }
     }
 }
 
-#[repr(u32)] // only for C interface
-#[derive(Copy, Clone, TryFromPrimitive, IntoPrimitive)] // only for C interface
-pub enum CipherDirection {
-    Encrypt = 0,
-    Decrypt = 1,
-    Any = 2,
-}
-
 pub trait Cipher {
-    fn key_size(&self) -> usize;
-    fn iv_size(&self) -> usize;
-    fn init(&mut self, key: &[u8]) -> Result<(), Error>;
-    fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error>;
-    fn set_iv(&mut self, iv: &[u8], direction: CipherDirection) -> Result<(), Error>;
-    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
-    fn decrypt(&mut self, buf: &mut [u8], ct_size: usize) -> Result<usize, Error>;
+    fn id(&self) -> CipherTypeID;
+
+    fn rtp_nonce(
+        &self,
+        ssrc: u32,
+        ext_seq_num: ExtendedSequenceNumber,
+        nonce: &mut [u8],
+    ) -> Result<usize, Error>;
+    fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error>;
+
+    fn encrypt(
+        &self,
+        nonce: &[u8],
+        aad: &[u8],
+        buf: &mut [u8],
+        pt_size: usize,
+    ) -> Result<usize, Error>;
+    fn decrypt(
+        &self,
+        nonce: &[u8],
+        aad: &[u8],
+        buf: &mut [u8],
+        ct_size: usize, // TODO(RLB) Delete ct_size
+    ) -> Result<usize, Error>;
 
     // XXX(RLB): These methods are required to support cloning of SRTP streams.  Right now, Cipher
     // objects are not suitable for shared usage (Rc / Arc) because (a) doing anything with them
@@ -118,7 +172,7 @@ impl Clone for Box<dyn Cipher> {
 
 pub trait CipherType {
     fn id(&self) -> CipherTypeID;
-    fn create(&self, key_len: usize, out_len: usize) -> Result<Box<dyn Cipher>, Error>;
+    fn create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn Cipher>, Error>;
 }
 
 //
@@ -131,11 +185,18 @@ pub enum AuthTypeID {
     HmacSha1 = 3,
 }
 
+impl AuthTypeID {
+    pub fn key_size(&self) -> usize {
+        match self {
+            AuthTypeID::Null => constants::NULL_AUTH_KEY_LEN,
+            AuthTypeID::HmacSha1 => constants::HMAC_SHA1_KEY_LEN,
+        }
+    }
+}
+
 pub trait Auth {
-    fn key_size(&self) -> usize;
     fn tag_size(&self) -> usize;
     fn prefix_size(&self) -> usize;
-    fn init(&mut self, key: &[u8]) -> Result<(), Error>;
     fn start(&mut self) -> Result<(), Error>;
     fn update(&mut self, update: &[u8]) -> Result<(), Error>;
     fn compute(&mut self, message: &[u8], tag: &mut [u8]) -> Result<(), Error>;
@@ -148,7 +209,7 @@ pub trait Auth {
 
 pub trait AuthType {
     fn id(&self) -> AuthTypeID;
-    fn create(&self, key_len: usize, out_len: usize) -> Result<Box<dyn Auth>, Error>;
+    fn create(&self, key: &[u8], tag_size: usize) -> Result<Box<dyn Auth>, Error>;
 }
 
 impl Clone for Box<dyn Auth> {
@@ -206,11 +267,11 @@ impl CryptoKernel {
     pub fn cipher(
         &self,
         id: CipherTypeID,
-        key_len: usize,
-        tag_len: usize,
+        key: &[u8],
+        salt: &[u8],
     ) -> Result<Box<dyn Cipher>, Error> {
         match self.cipher_types.get(&id) {
-            Some(cipher_type) => cipher_type.create(key_len, tag_len),
+            Some(cipher_type) => cipher_type.create(key, salt),
             _ => Err(Error::Fail),
         }
     }
@@ -218,11 +279,11 @@ impl CryptoKernel {
     pub fn auth(
         &self,
         id: AuthTypeID,
-        key_len: usize,
-        tag_len: usize,
+        key: &[u8],
+        tag_size: usize,
     ) -> Result<Box<dyn Auth>, Error> {
         match self.auth_types.get(&id) {
-            Some(auth_type) => auth_type.create(key_len, tag_len),
+            Some(auth_type) => auth_type.create(key, tag_size),
             _ => Err(Error::Fail),
         }
     }

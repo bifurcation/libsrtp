@@ -8,22 +8,20 @@ type HmacSha1 = Hmac<Sha1>;
 
 #[derive(Clone)]
 struct HMAC {
-    key_size: usize,
     tag_size: usize,
-    mac: Option<HmacSha1>,
+    mac: HmacSha1,
 }
 
 impl HMAC {
-    fn hmac(&mut self) -> Result<&mut HmacSha1, Error> {
-        self.mac.as_mut().ok_or(Error::BadParam)
+    fn new(key: &[u8], tag_size: usize) -> Result<Self, Error> {
+        Ok(Self {
+            tag_size: tag_size,
+            mac: HmacSha1::new_from_slice(key).map_err(|_| Error::BadParam)?,
+        })
     }
 }
 
 impl Auth for HMAC {
-    fn key_size(&self) -> usize {
-        self.key_size
-    }
-
     fn tag_size(&self) -> usize {
         self.tag_size
     }
@@ -32,25 +30,19 @@ impl Auth for HMAC {
         0
     }
 
-    fn init(&mut self, key: &[u8]) -> Result<(), Error> {
-        let mac = HmacSha1::new_from_slice(key).map_err(|_| Error::BadParam)?;
-        self.mac = Some(mac);
-        Ok(())
-    }
-
     fn start(&mut self) -> Result<(), Error> {
-        self.hmac()?.reset();
+        self.mac.reset();
         Ok(())
     }
 
     fn update(&mut self, update: &[u8]) -> Result<(), Error> {
-        self.hmac()?.update(update);
+        self.mac.update(update);
         Ok(())
     }
 
     fn compute(&mut self, message: &[u8], tag: &mut [u8]) -> Result<(), Error> {
-        self.hmac()?.update(message);
-        let digest = self.hmac()?.finalize_reset().into_bytes();
+        self.mac.update(message);
+        let digest = self.mac.finalize_reset().into_bytes();
 
         if tag.len() < self.tag_size {
             return Err(Error::BadParam);
@@ -83,12 +75,8 @@ impl AuthType for NativeHMAC {
         AuthTypeID::HmacSha1
     }
 
-    fn create(&self, key_len: usize, out_len: usize) -> Result<Box<dyn Auth>, Error> {
-        Ok(Box::new(HMAC {
-            key_size: key_len,
-            tag_size: out_len,
-            mac: None,
-        }))
+    fn create(&self, key: &[u8], tag_size: usize) -> Result<Box<dyn Auth>, Error> {
+        Ok(Box::new(HMAC::new(key, tag_size)?))
     }
 }
 

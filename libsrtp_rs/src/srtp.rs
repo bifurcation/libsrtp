@@ -51,6 +51,54 @@ enum Direction {
     Receiver = 2,
 }
 
+struct CipherFactory<'a> {
+    kernel: &'a CryptoKernel,
+    kdf: &'a KDF,
+}
+
+impl<'a> CipherFactory<'a> {
+    fn new(kernel: &'a CryptoKernel, kdf: &'a KDF) -> Self {
+        Self {
+            kernel: kernel,
+            kdf: kdf,
+        }
+    }
+
+    fn cipher(
+        &self,
+        cipher_type: CipherTypeID,
+        key_label: KdfLabel,
+        salt_label: KdfLabel,
+        salt_size: usize,
+    ) -> Result<Box<dyn Cipher>, Error> {
+        let mut key_buffer = [0u8; 32];
+        let key = &mut key_buffer[..cipher_type.key_size()];
+        self.kdf.generate(key_label, key)?;
+
+        // XXX(RLB) This fiddling around with salt sizes is because the ciphers expect a fixed
+        // size, but the CTR modes used together with GCM modes provide a shorter salt.  Instead of
+        // actually using a shorter salt, we append zeros, which has the same effect.
+        let mut salt_buffer = [0u8; 14];
+        let salt = &mut salt_buffer[..cipher_type.salt_size()];
+        self.kdf.generate(salt_label, &mut salt[..salt_size])?;
+
+        self.kernel.cipher(cipher_type, key, salt)
+    }
+
+    fn auth(
+        &self,
+        auth_type: AuthTypeID,
+        key_label: KdfLabel,
+        tag_size: usize,
+    ) -> Result<Box<dyn Auth>, Error> {
+        let mut key_buffer = [0u8; 20];
+        let key = &mut key_buffer[..auth_type.key_size()];
+        self.kdf.generate(key_label, key)?;
+
+        self.kernel.auth(auth_type, key, tag_size)
+    }
+}
+
 #[derive(Clone)]
 pub struct SessionKeys {
     pub rtp_cipher: Box<dyn Cipher>,
@@ -59,21 +107,8 @@ pub struct SessionKeys {
     pub rtcp_cipher: Box<dyn Cipher>,
     pub rtcp_auth: Box<dyn Auth>,
 
-    pub salt: Vec<u8>,
-    pub c_salt: Vec<u8>,
     pub mki_id: Vec<u8>,
     pub limit: KeyLimitContext,
-}
-
-fn base_key_size(id: CipherTypeID, key_size: usize) -> usize {
-    match id {
-        CipherTypeID::Null => key_size,
-        CipherTypeID::AesIcm128 => key_size - constants::SALT_LEN,
-        CipherTypeID::AesIcm192 => key_size - constants::SALT_LEN,
-        CipherTypeID::AesIcm256 => key_size - constants::SALT_LEN,
-        CipherTypeID::AesGcm128 => key_size - constants::AEAD_SALT_LEN,
-        CipherTypeID::AesGcm256 => key_size - constants::AEAD_SALT_LEN,
-    }
 }
 
 const MAX_SRTP_KEY_SIZE: usize = 46; // XXX
@@ -85,105 +120,52 @@ impl SessionKeys {
         rtp: &CryptoPolicy,
         rtcp: &CryptoPolicy,
     ) -> Result<Self, Error> {
-        // Allocate ciphers
-        let xtn_hdr_cipher_type = rtp.cipher_type;
-        let xtn_hdr_key_len = rtp.cipher_key_len;
-        // TODO(RLB) if GCM, use corresponding ICM
+        // Set up a KDF and cipher factory
+        // XXX(RLB) Apparently we can't use key.salt directly, because it its length is expected to
+        // match the salt size for the RTP cipher.
+        let kdf_cipher_type = KDF::cipher_type(rtp.cipher_type, rtcp.cipher_type);
+        let mut kdf_salt = [0u8; 14];
+        kdf_salt[..key.salt.len()].copy_from_slice(&key.salt);
+        let kdf = KDF::new(kernel, kdf_cipher_type, &key.key, &kdf_salt)?;
+        let factory = CipherFactory::new(kernel, &kdf);
 
-        let mut rtp_cipher =
-            kernel.cipher(rtp.cipher_type, rtp.cipher_key_len, rtp.auth_tag_len)?;
-        let mut rtp_xtn_hdr_cipher =
-            kernel.cipher(xtn_hdr_cipher_type, xtn_hdr_key_len, rtp.auth_tag_len)?;
-        let mut rtp_auth = kernel.auth(rtp.auth_type, rtp.auth_key_len, rtp.auth_tag_len)?;
-        let mut rtcp_cipher =
-            kernel.cipher(rtcp.cipher_type, rtcp.cipher_key_len, rtcp.auth_tag_len)?;
-        let mut rtcp_auth = kernel.auth(rtcp.auth_type, rtcp.auth_key_len, rtcp.auth_tag_len)?;
-
-        // Set up KDF
-        let rtp_key_size = rtp_cipher.key_size();
-        let rtcp_key_size = rtcp_cipher.key_size();
-        let rtp_base_key_size = base_key_size(rtp.cipher_type, rtp_key_size);
-        let rtcp_base_key_size = base_key_size(rtcp.cipher_type, rtcp_key_size);
-        if key.key.len() != rtp_key_size {
-            return Err(Error::BadParam);
-        }
-
-        let mut kdf_key_size = 30;
-        if (rtp_key_size > kdf_key_size) || (rtcp_key_size > kdf_key_size) {
-            // AES-CTR mode is always used for KDF
-            // XXX(RLB) ???
-            kdf_key_size = 46;
-        }
-
-        let mut kdf_key = [0u8; MAX_SRTP_KEY_SIZE];
-        kdf_key[..key.key.len()].copy_from_slice(&key.key);
-        let mut kdf = KDF::new(kernel, &kdf_key[..kdf_key_size])?;
-
-        // Initialize RTP cipher
-        {
-            let key = kdf.generate(KdfLabel::RtpEncryption, rtp_key_size)?;
-            println!("cipher key: {:x?}", key);
-            rtp_cipher.init(key)?;
-        }
-
-        let rtp_salt_size = rtp_key_size - rtp_base_key_size;
-        let salt = kdf.generate(KdfLabel::RtpSalt, rtp_salt_size)?.to_vec();
-        println!("cipher salt: {:x?}", &salt);
-
-        // Initialize RTP extension header cipher
-        // TODO(RLB): This might require adaptation to use a different KDF for GCM ciphers (?)
-        if xtn_hdr_cipher_type != rtp.cipher_type {
-            return Err(Error::BadParam);
-        }
-        let xtn_hdr_key_size = rtp_cipher.key_size();
-        let xtn_hdr_base_key_size = base_key_size(xtn_hdr_cipher_type, xtn_hdr_key_size);
-
-        {
-            let key = kdf.generate(KdfLabel::RtpHeaderEncryption, xtn_hdr_key_size)?;
-            println!("extensions cipher key: {:x?}", key);
-            rtp_xtn_hdr_cipher.init(key)?;
-        }
-
-        let ext_salt = kdf.generate(
-            KdfLabel::RtpHeaderSalt,
-            xtn_hdr_key_size - xtn_hdr_base_key_size,
+        // Set up the RTP cipher
+        let rtp_cipher = factory.cipher(
+            rtp.cipher_type,
+            KdfLabel::RtpEncryption,
+            KdfLabel::RtpSalt,
+            rtp.cipher_type.salt_size(),
         )?;
-        println!("extensions cipher salt: {:x?}", ext_salt);
 
-        // Initialize RTP authentication
-        {
-            let key = kdf.generate(KdfLabel::RtpMsgAuth, rtp_auth.key_size())?;
-            println!("auth key: {:x?}", key);
-            rtp_auth.init(key)?;
-        }
+        // Set up the RTP extension header cipher
+        let xtn_hdr_cipher = factory.cipher(
+            rtp.cipher_type.extension_header_cipher_type(),
+            KdfLabel::RtpHeaderEncryption,
+            KdfLabel::RtpHeaderSalt,
+            rtp.cipher_type.salt_size(),
+        )?;
 
-        // Initialize RTCP encryption
-        {
-            let key = kdf.generate(KdfLabel::RtcpEncryption, rtcp_key_size)?;
-            println!("rtcp cipher key: {:x?}", key);
-            rtcp_cipher.init(key)?;
-        }
+        // Set up RTP authentication
+        let rtp_auth = factory.auth(rtp.auth_type, KdfLabel::RtpMsgAuth, rtp.auth_tag_len)?;
 
-        let rtp_salt_size = rtcp_key_size - rtcp_base_key_size;
-        let c_salt = kdf.generate(KdfLabel::RtcpSalt, rtp_salt_size)?.to_vec();
-        println!("rtcp cipher salt: {:x?}", &c_salt);
+        // Set up the RTCP cipher
+        let rtcp_cipher = factory.cipher(
+            rtcp.cipher_type,
+            KdfLabel::RtcpEncryption,
+            KdfLabel::RtcpSalt,
+            rtcp.cipher_type.salt_size(),
+        )?;
 
-        // Initialize RTCP authentication
-        {
-            let key = kdf.generate(KdfLabel::RtcpMsgAuth, rtcp_auth.key_size())?;
-            println!("rtcp auth key: {:x?}", key);
-            rtcp_auth.init(key)?;
-        }
+        // Set up RTCP authentication
+        let rtcp_auth = factory.auth(rtcp.auth_type, KdfLabel::RtcpMsgAuth, rtcp.auth_tag_len)?;
 
         Ok(SessionKeys {
             rtp_cipher: rtp_cipher,
-            rtp_xtn_hdr_cipher: rtp_xtn_hdr_cipher,
+            rtp_xtn_hdr_cipher: xtn_hdr_cipher,
             rtp_auth: rtp_auth,
             rtcp_cipher: rtcp_cipher,
             rtcp_auth: rtcp_auth,
 
-            salt: salt,
-            c_salt: c_salt,
             mki_id: key.id.clone(),
             limit: KeyLimitContext::new(),
         })
@@ -201,13 +183,38 @@ mod test {
         let key = MasterKey {
             key: vec![
                 0xe1, 0xf9, 0x7a, 0x0d, 0x3e, 0x01, 0x8b, 0xe0, 0xd6, 0x4f, 0xa3, 0x2c, 0x06, 0xde,
-                0x41, 0x39, 0x0e, 0xc6, 0x75, 0xad, 0x49, 0x8a, 0xfe, 0xeb, 0xb6, 0x96, 0x0b, 0x3a,
-                0xab, 0xe6,
+                0x41, 0x39,
+            ],
+            salt: vec![
+                0x0e, 0xc6, 0x75, 0xad, 0x49, 0x8a, 0xfe, 0xeb, 0xb6, 0x96, 0x0b, 0x3a, 0xab, 0xe6,
             ],
             id: vec![],
         };
         let rtp_policy = CryptoPolicy::rtp_default();
         let rtcp_policy = CryptoPolicy::rtcp_default();
+
+        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtp_policy)?;
+        // TODO verify that the keys are right
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_keys_gcm() -> Result<(), Error> {
+        // Verify that keys are derived in the same way as libsrtp in C
+        let kernel = CryptoKernel::default()?;
+        let key = MasterKey {
+            key: vec![
+                0xe1, 0xf9, 0x7a, 0x0d, 0x3e, 0x01, 0x8b, 0xe0, 0xd6, 0x4f, 0xa3, 0x2c, 0x06, 0xde,
+                0x41, 0x39,
+            ],
+            salt: vec![
+                0x0e, 0xc6, 0x75, 0xad, 0x49, 0x8a, 0xfe, 0xeb, 0xb6, 0x96, 0x0b, 0x3a,
+            ],
+            id: vec![],
+        };
+        let rtp_policy = CryptoPolicy::aes_gcm_128();
+        let rtcp_policy = CryptoPolicy::aes_gcm_128();
 
         let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtp_policy)?;
         // TODO verify that the keys are right
@@ -235,19 +242,12 @@ impl Stream {
     // ever called together.
     fn new(kernel: &CryptoKernel, policy: &Policy) -> Result<Self, Error> {
         // Set up SessionKeys for each master key
-        let mut session_keys = Vec::<SessionKeys>::new();
-        if let Some(key) = &policy.key {
-            let mk = MasterKey {
-                key: key.clone(),
-                id: vec![],
-            };
+        // XXX(RLB): Note that this deprecates the old policy interface, where you could just shove
+        // in a key, instead of formatting it as a master key
+        let mut session_keys = Vec::<SessionKeys>::with_capacity(policy.keys.len());
+        for mk in &policy.keys {
             session_keys.push(SessionKeys::new(kernel, &mk, &policy.rtp, &policy.rtcp)?);
-        } else {
-            session_keys = Vec::<SessionKeys>::with_capacity(policy.keys.len());
-            for mk in &policy.keys {
-                session_keys.push(SessionKeys::new(kernel, &mk, &policy.rtp, &policy.rtcp)?);
-            }
-        };
+        }
 
         Ok(Stream {
             ssrc: policy.ssrc.value,
@@ -317,9 +317,11 @@ impl Context {
         };
 
         for p in policies {
-            if let Err(err) = ctx.add_stream(kernel, p) {
-                return Err(err);
+            if !p.validate_master_keys() {
+                return Err(Error::BadParam);
             }
+
+            ctx.add_stream(kernel, p)?;
         }
 
         Ok(ctx)
@@ -511,11 +513,13 @@ impl Context {
 
         // Encrypt the payload
         // TODO AEAD-ish
+        /*
         let pt_size = pkt.payload_size();
         sk.rtp_cipher.set_iv(&nonce, CipherDirection::Encrypt)?;
         sk.rtp_cipher.set_aad(pkt.aad())?;
         let ct_size = sk.rtp_cipher.encrypt(pkt.payload(), pt_size)?;
         pkt.set_payload_size(ct_size)?;
+        */
 
         // Write the MKI
         pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
@@ -594,11 +598,13 @@ impl Context {
         }
 
         // Decrypt the payload
+        /*
         let ct_size = pkt.payload_size();
         sk.rtp_cipher.set_iv(&nonce, CipherDirection::Decrypt)?;
         sk.rtp_cipher.set_aad(pkt.aad())?;
         let pt_size = sk.rtp_cipher.decrypt(pkt.payload(), ct_size)?;
         pkt.set_payload_size(pt_size)?;
+        */
 
         Ok(pkt.size())
     }

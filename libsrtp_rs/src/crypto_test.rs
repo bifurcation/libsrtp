@@ -1,4 +1,4 @@
-use crate::crypto_kernel::{AuthType, AuthTypeID, CipherDirection, CipherType, CipherTypeID};
+use crate::crypto_kernel::{AuthType, AuthTypeID, CipherType, CipherTypeID};
 use crate::srtp::Error;
 
 //
@@ -7,6 +7,7 @@ use crate::srtp::Error;
 struct CipherTest {
     id: CipherTypeID,
     key: &'static [u8],
+    salt: &'static [u8],
     nonce: &'static [u8],
     aad: &'static [u8],
     plaintext: &'static [u8],
@@ -15,40 +16,32 @@ struct CipherTest {
 
 impl CipherTest {
     fn run(&self, cipher_type: &dyn CipherType) -> Result<(), Error> {
-        let mut cipher = cipher_type.create(self.key.len(), 0)?;
+        let cipher = cipher_type.create(self.key, self.salt)?;
 
         let pt_size = self.plaintext.len();
         let ct_size = self.ciphertext.len();
 
         // Encrypt
-        cipher.init(&self.key)?;
-        cipher.set_iv(&self.nonce, CipherDirection::Encrypt)?;
-        cipher.set_aad(&self.aad)?;
-
-        let mut encrypt_vec = vec![0u8; ct_size];
-        let encrypt_buffer = encrypt_vec.as_mut_slice();
-        encrypt_buffer[..pt_size].copy_from_slice(self.plaintext);
-        let encrypt_len = cipher.encrypt(encrypt_buffer, pt_size)?;
-        if encrypt_len != ct_size {
+        let mut enc_vec = vec![0u8; ct_size];
+        let enc_buffer = enc_vec.as_mut_slice();
+        enc_buffer[..pt_size].copy_from_slice(self.plaintext);
+        let enc_len = cipher.encrypt(self.nonce, self.aad, enc_buffer, pt_size)?;
+        if enc_len != ct_size {
             return Err(Error::AlgoFail);
         }
-        if encrypt_buffer != self.ciphertext {
+        if enc_buffer != self.ciphertext {
             return Err(Error::AlgoFail);
         }
 
         // Decrypt
-        cipher.init(&self.key)?;
-        cipher.set_iv(&self.nonce, CipherDirection::Decrypt)?;
-        cipher.set_aad(&self.aad)?;
-
-        let mut decrypt_vec = vec![0u8; ct_size];
-        let decrypt_buffer = decrypt_vec.as_mut_slice();
-        decrypt_buffer.copy_from_slice(self.ciphertext);
-        let decrypt_len = cipher.decrypt(decrypt_buffer, decrypt_buffer.len())?;
-        if decrypt_len != pt_size {
+        let mut dec_vec = vec![0u8; ct_size];
+        let dec_buffer = dec_vec.as_mut_slice();
+        dec_buffer.copy_from_slice(self.ciphertext);
+        let dec_len = cipher.decrypt(self.nonce, self.aad, dec_buffer, ct_size)?;
+        if dec_len != pt_size {
             return Err(Error::AlgoFail);
         }
-        if &decrypt_buffer[..pt_size] != self.plaintext {
+        if &dec_buffer[..pt_size] != self.plaintext {
             return Err(Error::AlgoFail);
         }
 
@@ -60,6 +53,7 @@ const CIPHER_TEST_DATA: [CipherTest; 6] = [
     CipherTest {
         id: CipherTypeID::Null,
         key: &[],
+        salt: &[],
         nonce: &[],
         aad: &[],
         plaintext: &[1, 2, 3, 4],
@@ -69,10 +63,15 @@ const CIPHER_TEST_DATA: [CipherTest; 6] = [
         id: CipherTypeID::AesIcm128,
         key: &[
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
-            0x4f, 0x3c, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb,
-            0xfc, 0xfd,
+            0x4f, 0x3c,
         ],
-        nonce: &[0; 16],
+        salt: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+        ],
+        nonce: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+            0x00, 0x00,
+        ],
         aad: &[],
         plaintext: &[0; 32],
         ciphertext: &[
@@ -85,10 +84,15 @@ const CIPHER_TEST_DATA: [CipherTest; 6] = [
         id: CipherTypeID::AesIcm192,
         key: &[
             0xea, 0xb2, 0x34, 0x76, 0x4e, 0x51, 0x7b, 0x2d, 0x3d, 0x16, 0x0d, 0x58, 0x7d, 0x8c,
-            0x86, 0x21, 0x97, 0x40, 0xf6, 0x5f, 0x99, 0xb6, 0xbc, 0xf7, 0xf0, 0xf1, 0xf2, 0xf3,
-            0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+            0x86, 0x21, 0x97, 0x40, 0xf6, 0x5f, 0x99, 0xb6, 0xbc, 0xf7,
         ],
-        nonce: &[0; 16],
+        salt: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+        ],
+        nonce: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+            0x00, 0x00,
+        ],
         aad: &[],
         plaintext: &[0; 32],
         ciphertext: &[
@@ -102,10 +106,15 @@ const CIPHER_TEST_DATA: [CipherTest; 6] = [
         key: &[
             0x57, 0xf8, 0x2f, 0xe3, 0x61, 0x3f, 0xd1, 0x70, 0xa8, 0x5e, 0xc9, 0x3c, 0x40, 0xb1,
             0xf0, 0x92, 0x2e, 0xc4, 0xcb, 0x0d, 0xc0, 0x25, 0xb5, 0x82, 0x72, 0x14, 0x7c, 0xc4,
-            0x38, 0x94, 0x4a, 0x98, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9,
-            0xfa, 0xfb, 0xfc, 0xfd,
+            0x38, 0x94, 0x4a, 0x98,
         ],
-        nonce: &[0; 16],
+        salt: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+        ],
+        nonce: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+            0x00, 0x00,
+        ],
         aad: &[],
         plaintext: &[0; 32],
         ciphertext: &[
@@ -118,7 +127,10 @@ const CIPHER_TEST_DATA: [CipherTest; 6] = [
         id: CipherTypeID::AesGcm128,
         key: &[
             0xfe, 0xff, 0xe9, 0x92, 0x86, 0x65, 0x73, 0x1c, 0x6d, 0x6a, 0x8f, 0x94, 0x67, 0x30,
-            0x83, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+            0x83, 0x08,
+        ],
+        salt: &[
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
         ],
         nonce: &[
             0xca, 0xfe, 0xba, 0xbe, 0xfa, 0xce, 0xdb, 0xad, 0xde, 0xca, 0xf8, 0x88,
@@ -148,8 +160,10 @@ const CIPHER_TEST_DATA: [CipherTest; 6] = [
         key: &[
             0xfe, 0xff, 0xe9, 0x92, 0x86, 0x65, 0x73, 0x1c, 0xa5, 0x59, 0x09, 0xc5, 0x54, 0x66,
             0x93, 0x1c, 0xaf, 0xf5, 0x26, 0x9a, 0x21, 0xd5, 0x14, 0xb2, 0x6d, 0x6a, 0x8f, 0x94,
-            0x67, 0x30, 0x83, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
-            0x0b, 0x0c,
+            0x67, 0x30, 0x83, 0x08,
+        ],
+        salt: &[
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
         ],
         nonce: &[
             0xca, 0xfe, 0xba, 0xbe, 0xfa, 0xce, 0xdb, 0xad, 0xde, 0xca, 0xf8, 0x88,
@@ -209,18 +223,17 @@ struct AuthTest {
 
 impl AuthTest {
     fn run(&self, auth_type: &dyn AuthType) -> Result<(), Error> {
-        let mut auth = auth_type.create(self.key.len(), self.tag.len())?;
+        let mut auth = auth_type.create(self.key, self.tag.len())?;
         let mut computed_tag = vec![0u8; tag_size(self.id)];
 
         // One step
-        auth.init(&self.key)?;
         auth.compute(&self.data, computed_tag.as_mut_slice())?;
         if computed_tag.as_slice() != self.tag {
             return Err(Error::AlgoFail);
         }
 
         // Two step
-        auth.init(&self.key)?;
+        auth.start()?;
         auth.update(&self.data)?;
         auth.compute(&[], computed_tag.as_mut_slice())?;
         if computed_tag.as_slice() != self.tag {
