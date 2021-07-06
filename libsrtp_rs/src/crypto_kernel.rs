@@ -74,6 +74,10 @@ pub mod constants {
     pub const AES_GCM_128_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_128_KEY_LEN;
     pub const AES_GCM_192_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_192_KEY_LEN;
     pub const AES_GCM_256_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_256_KEY_LEN;
+
+    pub const NULL_CIPHER_NONCE_SIZE: usize = 0;
+    pub const AES_ICM_NONCE_SIZE: usize = 16;
+    pub const AES_GCM_NONCE_SIZE: usize = 12;
 }
 
 //
@@ -99,6 +103,17 @@ impl CipherTypeID {
             CipherTypeID::AesIcm256 => constants::AES_256_KEY_LEN,
             CipherTypeID::AesGcm128 => constants::AES_128_KEY_LEN,
             CipherTypeID::AesGcm256 => constants::AES_256_KEY_LEN,
+        }
+    }
+
+    pub fn nonce_size(&self) -> usize {
+        match self {
+            CipherTypeID::Null => constants::NULL_CIPHER_NONCE_SIZE,
+            CipherTypeID::AesIcm128 => constants::AES_ICM_NONCE_SIZE,
+            CipherTypeID::AesIcm192 => constants::AES_ICM_NONCE_SIZE,
+            CipherTypeID::AesIcm256 => constants::AES_ICM_NONCE_SIZE,
+            CipherTypeID::AesGcm128 => constants::AES_GCM_NONCE_SIZE,
+            CipherTypeID::AesGcm256 => constants::AES_GCM_NONCE_SIZE,
         }
     }
 

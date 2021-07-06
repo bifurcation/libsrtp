@@ -72,17 +72,36 @@ where
         self.key_size.as_icm_id()
     }
 
+    // https://datatracker.ietf.org/doc/html/rfc3711#section-4.1.1
+    //
+    // IV = (k_s * 2^16) XOR (SSRC * 2^64) XOR (i * 2^16)
+    //
+    // In more graphical notation:
+    //
+    // +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    // |00|00|00|00|    SSRC   |     ROC   | SEQ |00|00|
+    // +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
     fn rtp_nonce(
         &self,
         ssrc: u32,
         ext_seq_num: ExtendedSequenceNumber,
         nonce: &mut [u8],
     ) -> Result<usize, Error> {
-        Err(Error::Fail) // TODO
+        if nonce.len() != self.id().nonce_size() {
+            return Err(Error::BadParam);
+        }
+
+        nonce.fill(0);
+        nonce[4..8].copy_from_slice(&ssrc.to_be_bytes());
+        nonce[8..14].copy_from_slice(&ext_seq_num.to_be_bytes()[2..]);
+        xor_eq(&mut nonce[..14], &self.salt);
+        Ok(nonce.len())
     }
 
+    // In the case of SRTCP, the SSRC of the first header of the compound
+    // packet MUST be used, i SHALL be the 31-bit SRTCP index...
     fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error> {
-        Err(Error::Fail) // TODO
+        self.rtp_nonce(ssrc, index.into(), nonce)
     }
 
     fn encrypt(
@@ -175,5 +194,56 @@ mod tests {
         assert!(tests_passed > 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_rtp_example() -> Result<(), Error> {
+        let key: [u8; 16] = [
+            0xc6, 0x1e, 0x7a, 0x93, 0x74, 0x4f, 0x39, 0xee, 0x10, 0x73, 0x4a, 0xfe, 0x3f, 0xf7,
+            0xa0, 0x87,
+        ];
+        let salt: [u8; 14] = [
+            0x30, 0xcb, 0xbc, 0x08, 0x86, 0x3d, 0x8c, 0x85, 0xd4, 0x9d, 0xb3, 0x4a, 0x9a, 0xe1,
+        ];
+        let ssrc: u32 = 0xcafebabe;
+        let ext_seq_num: ExtendedSequenceNumber = 0x0000001234;
+        let expected_nonce: [u8; 16] = [
+            // 30cbbc08863d8c85d49db34a9ae1 ^ 00000000cafebabe000000001234 || 0000
+            0x30, 0xcb, 0xbc, 0x08, 0x4c, 0xc3, 0x36, 0x3b, 0xd4, 0x9d, 0xb3, 0x4a, 0x88, 0xd5,
+            0x00, 0x00,
+        ];
+        let aad = [];
+        let pt: [u8; 16] = [0xab; 16];
+        let ct: [u8; 16] = [
+            0x4e, 0x55, 0xdc, 0x4c, 0xe7, 0x99, 0x78, 0xd8, 0x8c, 0xa4, 0xd2, 0x15, 0x94, 0x9d,
+            0x24, 0x02,
+        ];
+
+        let cipher_type = NativeAesIcm::new(AesKeySize::Aes128);
+        let cipher = cipher_type.create(&key, &salt)?;
+
+        // Verify correct nonce formation
+        let mut nonce: [u8; 16] = Default::default();
+        cipher.rtp_nonce(ssrc, ext_seq_num, &mut nonce)?;
+        assert_eq!(nonce, expected_nonce);
+
+        // Verify correct encryption
+        let mut enc_buffer = [0u8; 16];
+        enc_buffer[..pt.len()].copy_from_slice(&pt);
+        let ct_size = cipher.encrypt(&nonce, &aad, &mut enc_buffer, pt.len())?;
+        assert_eq!(ct_size, ct.len());
+        assert_eq!(enc_buffer, ct);
+
+        // Verify correct decryption
+        let pt_size = cipher.decrypt(&nonce, &aad, &mut enc_buffer, ct.len())?;
+        assert_eq!(pt_size, pt.len());
+        assert_eq!(&enc_buffer[..pt_size], &pt);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_rtcp_example() {
+        // TODO
     }
 }
