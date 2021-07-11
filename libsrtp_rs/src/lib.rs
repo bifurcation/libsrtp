@@ -12,6 +12,7 @@ pub mod policy;
 pub mod replay;
 mod rtp_header;
 pub mod srtp;
+mod util;
 
 // C-facing interfaces
 // XXX(RLB) Disabled for now, since the crypto interfaces have diverged so that they can be more

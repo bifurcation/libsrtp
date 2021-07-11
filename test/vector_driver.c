@@ -163,6 +163,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
+    /*
 #ifdef GCM
     printf("testing srtp_protect and srtp_unprotect against "
            "reference packet with encrypted extension headers (GCM)\n");
@@ -174,6 +175,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
 #endif
+    */
 
     return 0;
 }

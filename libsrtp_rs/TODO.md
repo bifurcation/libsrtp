@@ -1,12 +1,14 @@
 TODO
 ====
 
+* [X] Validate RTP packet parsing
+* [ ] Stream cipher interface with seeking
 * [ ] RTCP packet parsing
-* [ ] Validate packet parsing
+* [ ] Validate RTCP packet parsing
 * [ ] Complete SRTP protect / unprotect
 * [ ] Complete SRTCP protect / unprotect
 * [ ] User data
 * [ ] Event handler
 * [ ] Debug logging
-* [ ] Exotic GCM modes (short tags, auth-only SRTCP)
+* [ ] Short-tag GCM modes
 

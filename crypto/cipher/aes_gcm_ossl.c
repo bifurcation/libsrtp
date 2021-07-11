@@ -57,7 +57,7 @@
 #include "cipher_test_cases.h"
 
 srtp_debug_module_t srtp_mod_aes_gcm = {
-    0,        /* debugging is off by default */
+    1,        /* debugging is off by default */
     "aes gcm" /* printable module name       */
 };
 

@@ -24,6 +24,7 @@ pub enum Error {
     NoSuchOp = 12,   // unsupported operation
     NoContext = 13,  // no appropriate context found
     KeyExpired = 15, // can't use key any more
+    ParseError = 21, // error parsing data
     BadMki = 25,     // error MKI present in packet is invalid
 
                      /*
@@ -35,7 +36,6 @@ pub enum Error {
                      nonce_bad = 18,     // nonce check failed
                      read_fail = 19,     // couldn't read data
                      write_fail = 20,    // couldn't write data
-                     parse_err = 21,     // error parsing data
                      encode_err = 22,    // error encoding data
                      semaphore_err = 23, // error while using semaphores
                      pfkey_err = 24,     // error while using pfkey
@@ -507,9 +507,11 @@ impl Context {
         let nonce = [0u8; 16];
 
         // Encrypt the headers
+        /*
         for ext in pkt.extension() {
             // TODO encrypt header extension
         }
+        */
 
         // Encrypt the payload
         // TODO AEAD-ish
@@ -593,9 +595,11 @@ impl Context {
         }
 
         // Decrypt the headers
+        /*
         for ext in pkt.extension() {
             // TODO encrypt header extension
         }
+        */
 
         // Decrypt the payload
         /*

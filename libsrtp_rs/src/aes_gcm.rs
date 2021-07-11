@@ -2,15 +2,9 @@ use crate::crypto_kernel::constants::AesKeySize;
 use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
+use crate::util::xor_eq;
 use aes_gcm::aead::{generic_array::GenericArray, AeadInPlace, NewAead};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, Key, Nonce};
-
-// TODO(RLB) Put this somewhere common
-fn xor_eq(a: &mut [u8], b: &[u8]) {
-    for (b1, b2) in a.iter_mut().zip(b.iter()) {
-        *b1 ^= *b2;
-    }
-}
 
 #[derive(Clone)]
 struct Context<C> {

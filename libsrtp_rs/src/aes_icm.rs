@@ -5,6 +5,7 @@ use crate::crypto_kernel::constants::AesKeySize;
 use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
+use crate::util::xor_eq;
 use aes::cipher::{
     generic_array::{typenum::U16, GenericArray},
     BlockCipher, BlockEncrypt, NewBlockCipher,
@@ -13,12 +14,6 @@ use aes::{Aes128, Aes192, Aes256};
 use ctr::cipher::{NewCipher, StreamCipher};
 use ctr::Ctr128BE;
 use std::marker::PhantomData;
-
-fn xor_eq(a: &mut [u8], b: &[u8]) {
-    for (b1, b2) in a.iter_mut().zip(b.iter()) {
-        *b1 ^= *b2;
-    }
-}
 
 #[derive(Clone)]
 struct Context<C>
