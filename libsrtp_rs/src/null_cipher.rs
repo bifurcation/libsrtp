@@ -1,8 +1,38 @@
-use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
+use crate::crypto_kernel::{
+    Cipher, CipherType, CipherTypeID, ExtensionCipher, ExtensionCipherType, ExtensionCipherTypeID,
+};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
+use std::ops::Range;
 
 struct Context;
+
+impl ExtensionCipher for Context {
+    fn xtn_id(&self) -> ExtensionCipherTypeID {
+        ExtensionCipherTypeID::Null
+    }
+
+    fn rtp_xtn_header_iv(
+        &self,
+        ssrc: u32,
+        ext_seq_num: ExtendedSequenceNumber,
+        nonce: &mut [u8],
+    ) -> Result<usize, Error> {
+        Ok(0)
+    }
+
+    fn init(&mut self, iv: &[u8]) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn xor_key(&mut self, buffer: &mut [u8], range: Range<usize>) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn clone_inner(&self) -> Box<dyn ExtensionCipher> {
+        Box::new(Context {})
+    }
+}
 
 impl Cipher for Context {
     fn id(&self) -> CipherTypeID {
@@ -48,6 +78,16 @@ impl Cipher for Context {
 
 pub struct NullCipher;
 
+impl ExtensionCipherType for NullCipher {
+    fn xtn_id(&self) -> ExtensionCipherTypeID {
+        ExtensionCipherTypeID::Null
+    }
+
+    fn xtn_create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn ExtensionCipher>, Error> {
+        Ok(Box::new(Context {}))
+    }
+}
+
 impl CipherType for NullCipher {
     fn id(&self) -> CipherTypeID {
         CipherTypeID::Null
@@ -69,6 +109,17 @@ mod tests {
         assert_eq!(cipher_type.id(), CipherTypeID::Null);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;
+        assert!(tests_passed > 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_cipher_xtn() -> Result<(), Error> {
+        let cipher_type = NullCipher {};
+        assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::Null);
+
+        let tests_passed = crypto_test::xtn_cipher(&cipher_type)?;
         assert!(tests_passed > 0);
 
         Ok(())

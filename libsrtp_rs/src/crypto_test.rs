@@ -1,5 +1,128 @@
-use crate::crypto_kernel::{AuthType, AuthTypeID, CipherType, CipherTypeID};
+use crate::crypto_kernel::{
+    AuthType, AuthTypeID, CipherType, CipherTypeID, ExtensionCipherType, ExtensionCipherTypeID,
+};
 use crate::srtp::Error;
+use std::ops::Range;
+
+//
+// Extension Cipher Tests
+//
+struct ExtensionCipherTest {
+    id: ExtensionCipherTypeID,
+    key: &'static [u8],
+    salt: &'static [u8],
+    iv: &'static [u8],
+    ranges: &'static [Range<usize>],
+    plaintext: &'static [u8],
+    ciphertext: &'static [u8],
+}
+
+impl ExtensionCipherTest {
+    fn run(&self, xtn_cipher_type: &dyn ExtensionCipherType) -> Result<(), Error> {
+        let mut cipher = xtn_cipher_type.xtn_create(self.key, self.salt)?;
+        cipher.init(self.iv)?;
+
+        let mut enc_vec = vec![0u8; self.plaintext.len()];
+        let enc_buffer = enc_vec.as_mut_slice();
+        enc_buffer.copy_from_slice(self.plaintext);
+        for r in self.ranges {
+            cipher.xor_key(enc_buffer, r.clone())?;
+        }
+        if enc_buffer != self.ciphertext {
+            return Err(Error::AlgoFail);
+        }
+
+        Ok(())
+    }
+}
+
+const XTN_CIPHER_TEST_DATA: &'static [ExtensionCipherTest] = &[
+    ExtensionCipherTest {
+        id: ExtensionCipherTypeID::Null,
+        key: &[],
+        salt: &[],
+        iv: &[],
+        ranges: &[2..5, 7..10, 12..13],
+        plaintext: &[
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+        ],
+        ciphertext: &[
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+        ],
+    },
+    ExtensionCipherTest {
+        id: ExtensionCipherTypeID::AesIcm128,
+        key: &[
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
+            0x4f, 0x3c,
+        ],
+        salt: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+        ],
+        iv: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+            0x00, 0x00,
+        ],
+        ranges: &[2..5, 7..10, 12..13],
+        plaintext: &[0; 13],
+        ciphertext: &[
+            0x00, 0x00, 0xad, 0x09, 0x35, 0x00, 0x00, 0x80, 0xe1, 0x66, 0x00, 0x00, 0xd9,
+        ],
+    },
+    ExtensionCipherTest {
+        id: ExtensionCipherTypeID::AesIcm192,
+        key: &[
+            0xea, 0xb2, 0x34, 0x76, 0x4e, 0x51, 0x7b, 0x2d, 0x3d, 0x16, 0x0d, 0x58, 0x7d, 0x8c,
+            0x86, 0x21, 0x97, 0x40, 0xf6, 0x5f, 0x99, 0xb6, 0xbc, 0xf7,
+        ],
+        salt: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+        ],
+        iv: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+            0x00, 0x00,
+        ],
+        ranges: &[2..5, 7..10, 12..13],
+        plaintext: &[0; 13],
+        ciphertext: &[
+            0x00, 0x00, 0x6c, 0xba, 0x46, 0x00, 0x00, 0x8d, 0xc1, 0xb5, 0x00, 0x00, 0x80,
+        ],
+    },
+    ExtensionCipherTest {
+        id: ExtensionCipherTypeID::AesIcm256,
+        key: &[
+            0x57, 0xf8, 0x2f, 0xe3, 0x61, 0x3f, 0xd1, 0x70, 0xa8, 0x5e, 0xc9, 0x3c, 0x40, 0xb1,
+            0xf0, 0x92, 0x2e, 0xc4, 0xcb, 0x0d, 0xc0, 0x25, 0xb5, 0x82, 0x72, 0x14, 0x7c, 0xc4,
+            0x38, 0x94, 0x4a, 0x98,
+        ],
+        salt: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+        ],
+        iv: &[
+            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+            0x00, 0x00,
+        ],
+        ranges: &[2..5, 7..10, 12..13],
+        plaintext: &[0; 13],
+        ciphertext: &[
+            0x00, 0x00, 0xd2, 0x8a, 0x93, 0x00, 0x00, 0x25, 0x11, 0xc6, 0x00, 0x00, 0x8b,
+        ],
+    },
+];
+
+pub fn xtn_cipher(xtn_cipher_type: &dyn ExtensionCipherType) -> Result<usize, Error> {
+    let mut tests_passed: usize = 0;
+    for test in XTN_CIPHER_TEST_DATA {
+        if test.id != xtn_cipher_type.xtn_id() {
+            continue;
+        }
+
+        test.run(xtn_cipher_type)?;
+        tests_passed += 1;
+    }
+
+    Ok(tests_passed)
+}
 
 //
 // Cipher Tests
@@ -49,7 +172,7 @@ impl CipherTest {
     }
 }
 
-const CIPHER_TEST_DATA: [CipherTest; 6] = [
+const CIPHER_TEST_DATA: &'static [CipherTest] = &[
     CipherTest {
         id: CipherTypeID::Null,
         key: &[],
@@ -192,7 +315,7 @@ const CIPHER_TEST_DATA: [CipherTest; 6] = [
 
 pub fn cipher(cipher_type: &dyn CipherType) -> Result<usize, Error> {
     let mut tests_passed: usize = 0;
-    for test in &CIPHER_TEST_DATA {
+    for test in CIPHER_TEST_DATA {
         if test.id != cipher_type.id() {
             continue;
         }
@@ -244,7 +367,7 @@ impl AuthTest {
     }
 }
 
-const AUTH_TEST_DATA: [AuthTest; 2] = [
+const AUTH_TEST_DATA: &'static [AuthTest] = &[
     AuthTest {
         id: AuthTypeID::Null,
         key: &[],
@@ -264,7 +387,7 @@ const AUTH_TEST_DATA: [AuthTest; 2] = [
 
 pub fn auth(auth_type: &dyn AuthType) -> Result<usize, Error> {
     let mut tests_passed: usize = 0;
-    for test in &AUTH_TEST_DATA {
+    for test in AUTH_TEST_DATA {
         if test.id != auth_type.id() {
             continue;
         }

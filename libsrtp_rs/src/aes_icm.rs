@@ -1,8 +1,7 @@
-// XXX(RLB) RustCrypto offers AES-CTR implementations, but not for 16-bit counters.  If that
-// changes in the future, we should remove the CTR internals here.
-
 use crate::crypto_kernel::constants::AesKeySize;
-use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
+use crate::crypto_kernel::{
+    Cipher, CipherType, CipherTypeID, ExtensionCipher, ExtensionCipherType, ExtensionCipherTypeID,
+};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 use crate::util::xor_eq;
@@ -11,9 +10,9 @@ use aes::cipher::{
     BlockCipher, BlockEncrypt, NewBlockCipher,
 };
 use aes::{Aes128, Aes192, Aes256};
-use ctr::cipher::{NewCipher, StreamCipher};
+use ctr::cipher::{NewCipher, StreamCipher, StreamCipherSeek};
 use ctr::Ctr128BE;
-use std::marker::PhantomData;
+use std::ops::Range;
 
 #[derive(Clone)]
 struct Context<C>
@@ -23,13 +22,15 @@ where
     key_size: AesKeySize,
     key: [u8; 32],
     salt: [u8; 14],
-    phantom: PhantomData<C>,
+    cipher: Option<Ctr128BE<C>>,
 }
 
 impl<C> Context<C>
 where
     C: Clone + BlockEncrypt + BlockCipher<BlockSize = U16> + NewBlockCipher + 'static,
 {
+    const NONCE_SIZE: usize = 16;
+
     fn new(key_size: AesKeySize, key: &[u8], salt: &[u8]) -> Result<Self, Error> {
         let id = key_size.as_icm_id();
         if key.len() != id.key_size() || salt.len() != id.salt_size() {
@@ -40,7 +41,7 @@ where
             key_size: key_size,
             key: Default::default(),
             salt: Default::default(),
-            phantom: PhantomData,
+            cipher: None,
         };
 
         ctx.key_mut().copy_from_slice(key);
@@ -49,13 +50,88 @@ where
     }
 
     fn key(&self) -> &[u8] {
-        let key_size = self.id().key_size();
+        let key_size = self.key_size.as_usize();
         &self.key[..key_size]
     }
 
     fn key_mut(&mut self) -> &mut [u8] {
-        let key_size = self.id().key_size();
+        let key_size = self.key_size.as_usize();
         &mut self.key[..key_size]
+    }
+
+    // Placed up here because it is used for both SRTP encryption and extension header encryption.
+    //
+    // https://datatracker.ietf.org/doc/html/rfc3711#section-4.1.1
+    //
+    // IV = (k_s * 2^16) XOR (SSRC * 2^64) XOR (i * 2^16)
+    //
+    // In more graphical notation:
+    //
+    // +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    // |00|00|00|00|    SSRC   |     ROC   | SEQ |00|00|
+    // +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    fn make_rtp_nonce(
+        &self,
+        ssrc: u32,
+        ext_seq_num: ExtendedSequenceNumber,
+        nonce: &mut [u8],
+    ) -> Result<usize, Error> {
+        if nonce.len() != Self::NONCE_SIZE {
+            return Err(Error::BadParam);
+        }
+
+        nonce.fill(0);
+        nonce[4..8].copy_from_slice(&ssrc.to_be_bytes());
+        nonce[8..14].copy_from_slice(&ext_seq_num.to_be_bytes()[2..]);
+        xor_eq(&mut nonce[..14], &self.salt);
+        Ok(nonce.len())
+    }
+}
+
+impl<C> ExtensionCipher for Context<C>
+where
+    C: Clone + BlockEncrypt + BlockCipher<BlockSize = U16> + NewBlockCipher + 'static,
+{
+    fn xtn_id(&self) -> ExtensionCipherTypeID {
+        self.key_size.as_stream_icm_id()
+    }
+
+    fn rtp_xtn_header_iv(
+        &self,
+        ssrc: u32,
+        ext_seq_num: ExtendedSequenceNumber,
+        nonce: &mut [u8],
+    ) -> Result<usize, Error> {
+        self.make_rtp_nonce(ssrc, ext_seq_num, nonce)
+    }
+
+    fn init(&mut self, iv: &[u8]) -> Result<(), Error> {
+        let key = GenericArray::from_slice(self.key());
+        self.cipher = Some(Ctr128BE::new(&key, iv.into()));
+        Ok(())
+    }
+
+    fn xor_key(&mut self, buffer: &mut [u8], range: Range<usize>) -> Result<(), Error> {
+        if range.is_empty() {
+            return Ok(());
+        }
+
+        if self.cipher.is_none() {
+            return Err(Error::CipherFail);
+        }
+
+        let cipher = self.cipher.as_mut().unwrap();
+        cipher
+            .try_seek(range.start)
+            .map_err(|_| Error::CipherFail)?;
+        cipher
+            .try_apply_keystream(&mut buffer[range])
+            .map_err(|_| Error::CipherFail)?;
+        Ok(())
+    }
+
+    fn clone_inner(&self) -> Box<dyn ExtensionCipher> {
+        Box::new(self.clone())
     }
 }
 
@@ -67,30 +143,13 @@ where
         self.key_size.as_icm_id()
     }
 
-    // https://datatracker.ietf.org/doc/html/rfc3711#section-4.1.1
-    //
-    // IV = (k_s * 2^16) XOR (SSRC * 2^64) XOR (i * 2^16)
-    //
-    // In more graphical notation:
-    //
-    // +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    // |00|00|00|00|    SSRC   |     ROC   | SEQ |00|00|
-    // +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
     fn rtp_nonce(
         &self,
         ssrc: u32,
         ext_seq_num: ExtendedSequenceNumber,
         nonce: &mut [u8],
     ) -> Result<usize, Error> {
-        if nonce.len() != self.id().nonce_size() {
-            return Err(Error::BadParam);
-        }
-
-        nonce.fill(0);
-        nonce[4..8].copy_from_slice(&ssrc.to_be_bytes());
-        nonce[8..14].copy_from_slice(&ext_seq_num.to_be_bytes()[2..]);
-        xor_eq(&mut nonce[..14], &self.salt);
-        Ok(nonce.len())
+        self.make_rtp_nonce(ssrc, ext_seq_num, nonce)
     }
 
     // In the case of SRTCP, the SSRC of the first header of the compound
@@ -124,8 +183,7 @@ where
     }
 
     fn clone_inner(&self) -> Box<dyn Cipher> {
-        let clone = (*self).clone();
-        Box::new(clone)
+        Box::new(self.clone())
     }
 }
 
@@ -136,6 +194,20 @@ pub struct NativeAesIcm {
 impl NativeAesIcm {
     pub fn new(key_size: AesKeySize) -> Self {
         NativeAesIcm { key_size: key_size }
+    }
+}
+
+impl ExtensionCipherType for NativeAesIcm {
+    fn xtn_id(&self) -> ExtensionCipherTypeID {
+        self.key_size.as_stream_icm_id()
+    }
+
+    fn xtn_create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn ExtensionCipher>, Error> {
+        Ok(match self.key_size {
+            AesKeySize::Aes128 => Box::new(Context::<Aes128>::new(self.key_size, key, salt)?),
+            AesKeySize::Aes192 => Box::new(Context::<Aes192>::new(self.key_size, key, salt)?),
+            AesKeySize::Aes256 => Box::new(Context::<Aes256>::new(self.key_size, key, salt)?),
+        })
     }
 }
 
@@ -160,10 +232,10 @@ mod tests {
 
     #[test]
     fn test_aes_icm_128() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(AesKeySize::Aes128);
+        let cipher_type: Box<dyn CipherType> = Box::new(NativeAesIcm::new(AesKeySize::Aes128));
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm128);
 
-        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        let tests_passed = crypto_test::cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -171,10 +243,10 @@ mod tests {
 
     #[test]
     fn test_aes_icm_192() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(AesKeySize::Aes192);
+        let cipher_type: Box<dyn CipherType> = Box::new(NativeAesIcm::new(AesKeySize::Aes192));
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm192);
 
-        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        let tests_passed = crypto_test::cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -182,11 +254,102 @@ mod tests {
 
     #[test]
     fn test_aes_icm_256() -> Result<(), Error> {
-        let cipher_type = NativeAesIcm::new(AesKeySize::Aes256);
+        let cipher_type: Box<dyn CipherType> = Box::new(NativeAesIcm::new(AesKeySize::Aes256));
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm256);
 
-        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        let tests_passed = crypto_test::cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aes_icm_128_xtn() -> Result<(), Error> {
+        let cipher_type: Box<dyn ExtensionCipherType> =
+            Box::new(NativeAesIcm::new(AesKeySize::Aes128));
+        assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm128);
+
+        let tests_passed = crypto_test::xtn_cipher(cipher_type.as_ref())?;
+        assert!(tests_passed > 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aes_icm_192_xtn() -> Result<(), Error> {
+        let cipher_type: Box<dyn ExtensionCipherType> =
+            Box::new(NativeAesIcm::new(AesKeySize::Aes192));
+        assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm192);
+
+        let tests_passed = crypto_test::xtn_cipher(cipher_type.as_ref())?;
+        assert!(tests_passed > 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aes_icm_256_xtn() -> Result<(), Error> {
+        let cipher_type: Box<dyn ExtensionCipherType> =
+            Box::new(NativeAesIcm::new(AesKeySize::Aes256));
+        assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm256);
+
+        let tests_passed = crypto_test::xtn_cipher(cipher_type.as_ref())?;
+        assert!(tests_passed > 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_rtp_xtn_header_example() -> Result<(), Error> {
+        let key: [u8; 16] = [
+            0x54, 0x97, 0x52, 0x05, 0x4d, 0x6f, 0xb7, 0x08, 0x62, 0x2c, 0x4a, 0x2e, 0x59, 0x6a,
+            0x1b, 0x93,
+        ];
+        let salt: [u8; 14] = [
+            0xab, 0x01, 0x81, 0x81, 0x74, 0xc4, 0x0d, 0x39, 0xa3, 0x78, 0x1f, 0x7c, 0x2d, 0x27,
+        ];
+        let ssrc: u32 = 0xcafebabe;
+        let ext_seq_num: ExtendedSequenceNumber = 0x0000001234;
+        let expected_iv: [u8; 16] = [
+            // ab01818174c40d39a3781f7c2d27 ^ 00000000cafebabe000000001234 || 0000
+            0xab, 0x01, 0x81, 0x81, 0xbe, 0x3a, 0xb7, 0x87, 0xa3, 0x78, 0x1f, 0x7c, 0x3f, 0x13,
+            0x00, 0x00,
+        ];
+        let ranges: &'static [Range<usize>] = &[1..9, 14..15, 16..23];
+        let pt: &'static [u8] = &[
+            0x17, 0x41, 0x42, 0x73, 0xa4, 0x75, 0x26, 0x27, 0x48, 0x22, 0x00, 0x00, 0xc8, 0x30,
+            0x8e, 0x46, 0x55, 0x99, 0x63, 0x86, 0xb3, 0x95, 0xfb, 0x00,
+        ];
+        let ct: &'static [u8] = &[
+            0x17, 0x58, 0x8A, 0x92, 0x70, 0xF4, 0xE1, 0x5E, 0x1C, 0x22, 0x00, 0x00, 0xC8, 0x30,
+            0x95, 0x46, 0xA9, 0x94, 0xF0, 0xBC, 0x54, 0x78, 0x97, 0x00,
+        ];
+
+        let cipher_type: Box<dyn ExtensionCipherType> =
+            Box::new(NativeAesIcm::new(AesKeySize::Aes128));
+        let mut cipher = cipher_type.xtn_create(&key, &salt)?;
+
+        // Verify correct nonce formation
+        let mut iv: [u8; 16] = Default::default();
+        cipher.rtp_xtn_header_iv(ssrc, ext_seq_num, &mut iv)?;
+        assert_eq!(iv, expected_iv);
+
+        // Generate raw keystream
+        let mut keystream = [0u8; 24];
+        cipher.init(&iv)?;
+        cipher.xor_key(&mut keystream, 0..24);
+        println!("keystream: {:02x?}", keystream);
+
+        // Verify correct encryption
+        let mut encrypt_buffer = [0u8; 24];
+        encrypt_buffer.copy_from_slice(pt);
+        cipher.init(&iv)?;
+        for r in ranges {
+            cipher.xor_key(&mut encrypt_buffer, r.clone())?;
+        }
+        println!("enc_buf:   {:02x?}", encrypt_buffer);
+        println!("ct:        {:02x?}", ct);
+        assert_eq!(encrypt_buffer, ct);
 
         Ok(())
     }
@@ -214,7 +377,7 @@ mod tests {
             0x24, 0x02,
         ];
 
-        let cipher_type = NativeAesIcm::new(AesKeySize::Aes128);
+        let cipher_type: Box<dyn CipherType> = Box::new(NativeAesIcm::new(AesKeySize::Aes128));
         let cipher = cipher_type.create(&key, &salt)?;
 
         // Verify correct nonce formation

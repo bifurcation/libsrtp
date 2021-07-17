@@ -64,6 +64,27 @@ impl<'a> CipherFactory<'a> {
         }
     }
 
+    fn xtn_cipher(
+        &self,
+        xtn_cipher_type: ExtensionCipherTypeID,
+        key_label: KdfLabel,
+        salt_label: KdfLabel,
+        salt_size: usize,
+    ) -> Result<Box<dyn ExtensionCipher>, Error> {
+        let mut key_buffer = [0u8; 32];
+        let key = &mut key_buffer[..xtn_cipher_type.key_size()];
+        self.kdf.generate(key_label, key)?;
+
+        // XXX(RLB) This fiddling around with salt sizes is because the ciphers expect a fixed
+        // size, but the CTR modes used together with GCM modes provide a shorter salt.  Instead of
+        // actually using a shorter salt, we append zeros, which has the same effect.
+        let mut salt_buffer = [0u8; 14];
+        let salt = &mut salt_buffer[..xtn_cipher_type.salt_size()];
+        self.kdf.generate(salt_label, &mut salt[..salt_size])?;
+
+        self.kernel.xtn_cipher(xtn_cipher_type, key, salt)
+    }
+
     fn cipher(
         &self,
         cipher_type: CipherTypeID,
@@ -102,7 +123,7 @@ impl<'a> CipherFactory<'a> {
 #[derive(Clone)]
 pub struct SessionKeys {
     pub rtp_cipher: Box<dyn Cipher>,
-    pub rtp_xtn_hdr_cipher: Box<dyn Cipher>,
+    pub rtp_xtn_hdr_cipher: Box<dyn ExtensionCipher>,
     pub rtp_auth: Box<dyn Auth>,
     pub rtcp_cipher: Box<dyn Cipher>,
     pub rtcp_auth: Box<dyn Auth>,
@@ -138,7 +159,7 @@ impl SessionKeys {
         )?;
 
         // Set up the RTP extension header cipher
-        let xtn_hdr_cipher = factory.cipher(
+        let xtn_hdr_cipher = factory.xtn_cipher(
             rtp.cipher_type.extension_header_cipher_type(),
             KdfLabel::RtpHeaderEncryption,
             KdfLabel::RtpHeaderSalt,

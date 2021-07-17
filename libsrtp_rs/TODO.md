@@ -11,4 +11,4 @@ TODO
 * [ ] Event handler
 * [ ] Debug logging
 * [ ] Short-tag GCM modes
-
+* [ ] Use Rc<T> instead of Box<T> for crypto objects

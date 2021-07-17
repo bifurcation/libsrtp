@@ -1406,6 +1406,10 @@ static srtp_err_status_t srtp_process_header_encryption(
             if (status)
                 return srtp_err_status_cipher_fail;
 
+
+            debug_print(mod_srtp, "xtn header keystream: %s",
+                srtp_octet_string_hex_string(keystream, xlen_with_header));
+
             if (srtp_protect_extension_header(stream, xid)) {
                 keystream_pos = 1;
                 while (xlen > 0) {

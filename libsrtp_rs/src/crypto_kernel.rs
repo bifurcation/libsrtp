@@ -2,6 +2,7 @@ use crate::crypto_test;
 use crate::srtp::Error;
 use std::any::Any;
 use std::collections::HashMap;
+use std::ops::Range;
 
 use crate::aes_gcm::NativeAesGcm;
 use crate::aes_icm::NativeAesIcm;
@@ -15,6 +16,7 @@ use crate::replay::ExtendedSequenceNumber;
 //
 pub mod constants {
     use super::CipherTypeID;
+    use super::ExtensionCipherTypeID;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum AesKeySize {
@@ -45,6 +47,14 @@ pub mod constants {
                 AesKeySize::Aes128 => CipherTypeID::AesGcm128,
                 AesKeySize::Aes192 => panic!("Invalid GCM key size"),
                 AesKeySize::Aes256 => CipherTypeID::AesGcm256,
+            }
+        }
+
+        pub fn as_stream_icm_id(&self) -> ExtensionCipherTypeID {
+            match self {
+                AesKeySize::Aes128 => ExtensionCipherTypeID::AesIcm128,
+                AesKeySize::Aes192 => ExtensionCipherTypeID::AesIcm192,
+                AesKeySize::Aes256 => ExtensionCipherTypeID::AesIcm256,
             }
         }
     }
@@ -78,6 +88,73 @@ pub mod constants {
     pub const NULL_CIPHER_NONCE_SIZE: usize = 0;
     pub const AES_ICM_NONCE_SIZE: usize = 16;
     pub const AES_GCM_NONCE_SIZE: usize = 12;
+}
+
+//
+// ExtensionCipher
+//
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum ExtensionCipherTypeID {
+    Null = 0,
+    AesIcm128 = 1,
+    AesIcm192 = 4,
+    AesIcm256 = 5,
+}
+
+impl ExtensionCipherTypeID {
+    pub fn key_size(&self) -> usize {
+        match self {
+            ExtensionCipherTypeID::Null => constants::NULL_CIPHER_KEY_LEN,
+            ExtensionCipherTypeID::AesIcm128 => constants::AES_128_KEY_LEN,
+            ExtensionCipherTypeID::AesIcm192 => constants::AES_192_KEY_LEN,
+            ExtensionCipherTypeID::AesIcm256 => constants::AES_256_KEY_LEN,
+        }
+    }
+
+    pub fn nonce_size(&self) -> usize {
+        match self {
+            ExtensionCipherTypeID::Null => constants::NULL_CIPHER_NONCE_SIZE,
+            ExtensionCipherTypeID::AesIcm128 => constants::AES_ICM_NONCE_SIZE,
+            ExtensionCipherTypeID::AesIcm192 => constants::AES_ICM_NONCE_SIZE,
+            ExtensionCipherTypeID::AesIcm256 => constants::AES_ICM_NONCE_SIZE,
+        }
+    }
+
+    pub fn salt_size(&self) -> usize {
+        match self {
+            ExtensionCipherTypeID::Null => constants::NULL_CIPHER_SALT_LEN,
+            ExtensionCipherTypeID::AesIcm128 => constants::SALT_LEN,
+            ExtensionCipherTypeID::AesIcm192 => constants::SALT_LEN,
+            ExtensionCipherTypeID::AesIcm256 => constants::SALT_LEN,
+        }
+    }
+}
+
+pub trait ExtensionCipher {
+    fn xtn_id(&self) -> ExtensionCipherTypeID;
+    fn rtp_xtn_header_iv(
+        &self,
+        ssrc: u32,
+        ext_seq_num: ExtendedSequenceNumber,
+        nonce: &mut [u8],
+    ) -> Result<usize, Error>;
+    fn init(&mut self, iv: &[u8]) -> Result<(), Error>;
+    fn xor_key(&mut self, buffer: &mut [u8], range: Range<usize>) -> Result<(), Error>;
+
+    fn clone_inner(&self) -> Box<dyn ExtensionCipher>;
+}
+
+impl Clone for Box<dyn ExtensionCipher> {
+    fn clone(&self) -> Box<dyn ExtensionCipher> {
+        self.clone_inner()
+    }
+}
+
+pub trait ExtensionCipherType {
+    // XXX(RLB) These names are slightly awkward, but they avoid overlap  with the corresponding
+    // methods on CipherType when the same type implements both traits.
+    fn xtn_id(&self) -> ExtensionCipherTypeID;
+    fn xtn_create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn ExtensionCipher>, Error>;
 }
 
 //
@@ -128,14 +205,14 @@ impl CipherTypeID {
         }
     }
 
-    pub fn extension_header_cipher_type(&self) -> CipherTypeID {
+    pub fn extension_header_cipher_type(&self) -> ExtensionCipherTypeID {
         match self {
-            CipherTypeID::Null => CipherTypeID::Null,
-            CipherTypeID::AesIcm128 => CipherTypeID::AesIcm128,
-            CipherTypeID::AesIcm192 => CipherTypeID::AesIcm192,
-            CipherTypeID::AesIcm256 => CipherTypeID::AesIcm256,
-            CipherTypeID::AesGcm128 => CipherTypeID::AesIcm128,
-            CipherTypeID::AesGcm256 => CipherTypeID::AesIcm256,
+            CipherTypeID::Null => ExtensionCipherTypeID::Null,
+            CipherTypeID::AesIcm128 => ExtensionCipherTypeID::AesIcm128,
+            CipherTypeID::AesIcm192 => ExtensionCipherTypeID::AesIcm192,
+            CipherTypeID::AesIcm256 => ExtensionCipherTypeID::AesIcm256,
+            CipherTypeID::AesGcm128 => ExtensionCipherTypeID::AesIcm128,
+            CipherTypeID::AesGcm256 => ExtensionCipherTypeID::AesIcm256,
         }
     }
 }
@@ -237,6 +314,7 @@ impl Clone for Box<dyn Auth> {
 // Kernel
 //
 pub struct CryptoKernel {
+    xtn_cipher_types: HashMap<ExtensionCipherTypeID, Box<dyn ExtensionCipherType>>,
     cipher_types: HashMap<CipherTypeID, Box<dyn CipherType>>,
     auth_types: HashMap<AuthTypeID, Box<dyn AuthType>>,
 }
@@ -244,6 +322,7 @@ pub struct CryptoKernel {
 impl CryptoKernel {
     pub fn new() -> CryptoKernel {
         CryptoKernel {
+            xtn_cipher_types: HashMap::new(),
             cipher_types: HashMap::new(),
             auth_types: HashMap::new(),
         }
@@ -252,6 +331,12 @@ impl CryptoKernel {
     // XXX(RLB) We might not want this once we have crypto agility, but it's handy to have for now.
     pub fn default() -> Result<CryptoKernel, Error> {
         let mut kernel = CryptoKernel::new();
+
+        // Extension cipher types
+        kernel.load_xtn_cipher_type(Box::new(NullCipher {}))?;
+        kernel.load_xtn_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes128)))?;
+        kernel.load_xtn_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes192)))?;
+        kernel.load_xtn_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes256)))?;
 
         // Cipher types
         kernel.load_cipher_type(Box::new(NullCipher {}))?;
@@ -267,6 +352,12 @@ impl CryptoKernel {
         Ok(kernel)
     }
 
+    pub fn load_xtn_cipher_type(&mut self, ect: Box<dyn ExtensionCipherType>) -> Result<(), Error> {
+        crypto_test::xtn_cipher(ect.as_ref())?;
+        self.xtn_cipher_types.insert(ect.xtn_id(), ect);
+        Ok(())
+    }
+
     pub fn load_cipher_type(&mut self, ct: Box<dyn CipherType>) -> Result<(), Error> {
         crypto_test::cipher(ct.as_ref())?;
         self.cipher_types.insert(ct.id(), ct);
@@ -277,6 +368,18 @@ impl CryptoKernel {
         crypto_test::auth(at.as_ref())?;
         self.auth_types.insert(at.id(), at);
         Ok(())
+    }
+
+    pub fn xtn_cipher(
+        &self,
+        id: ExtensionCipherTypeID,
+        key: &[u8],
+        salt: &[u8],
+    ) -> Result<Box<dyn ExtensionCipher>, Error> {
+        match self.xtn_cipher_types.get(&id) {
+            Some(cipher_type) => cipher_type.xtn_create(key, salt),
+            _ => Err(Error::Fail),
+        }
     }
 
     pub fn cipher(
@@ -306,12 +409,7 @@ impl CryptoKernel {
 
 #[cfg(test)]
 mod test {
-    use super::constants::AesKeySize;
     use super::*;
-    use crate::aes_icm::NativeAesIcm;
-    use crate::hmac::NativeHMAC;
-    use crate::null_auth::NullAuth;
-    use crate::null_cipher::NullCipher;
 
     #[test]
     fn test_load_native_types() -> Result<(), Error> {

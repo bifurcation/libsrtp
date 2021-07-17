@@ -1,5 +1,4 @@
 use crate::srtp::{Error, SessionKeys};
-use crate::util::xor_eq;
 use core::iter::Iterator;
 use packed_struct::prelude::*;
 use std::ops::Range;
@@ -455,11 +454,12 @@ impl<'a> SrtpPacket<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::crypto_kernel::{AuthType, CipherType};
+    use crate::crypto_kernel::{AuthType, CipherType, ExtensionCipherType};
     use crate::hmac::NativeHMAC;
     use crate::key_limit::KeyLimitContext;
     use crate::null_auth::NullAuth;
     use crate::null_cipher::NullCipher;
+    use crate::util::xor_eq;
 
     // SRTP extension parsing
 
@@ -702,7 +702,7 @@ mod test {
         let hmac_sha1 = NativeHMAC;
         let mut sks = vec![SessionKeys {
             rtp_cipher: NullCipher {}.create(&[], &[])?,
-            rtp_xtn_hdr_cipher: NullCipher {}.create(&[], &[])?,
+            rtp_xtn_hdr_cipher: NullCipher {}.xtn_create(&[], &[])?,
             rtp_auth: NativeHMAC {}.create(&[], TAG.len())?,
             rtcp_cipher: NullCipher {}.create(&[], &[])?,
             rtcp_auth: NullAuth {}.create(&[], 0)?,
