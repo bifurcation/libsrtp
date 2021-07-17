@@ -10,7 +10,7 @@ pub mod null_auth;
 pub mod null_cipher;
 pub mod policy;
 pub mod replay;
-mod rtp_header;
+pub mod rtp_header;
 pub mod srtp;
 mod util;
 

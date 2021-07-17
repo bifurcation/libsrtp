@@ -14,18 +14,18 @@ impl ExtensionCipher for Context {
 
     fn rtp_xtn_header_iv(
         &self,
-        ssrc: u32,
-        ext_seq_num: ExtendedSequenceNumber,
-        nonce: &mut [u8],
+        _ssrc: u32,
+        _ext_seq_num: ExtendedSequenceNumber,
+        _nonce: &mut [u8],
     ) -> Result<usize, Error> {
         Ok(0)
     }
 
-    fn init(&mut self, iv: &[u8]) -> Result<(), Error> {
+    fn init(&mut self, _iv: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 
-    fn xor_key(&mut self, buffer: &mut [u8], range: Range<usize>) -> Result<(), Error> {
+    fn xor_key(&mut self, _buffer: &mut [u8], _range: Range<usize>) -> Result<(), Error> {
         Ok(())
     }
 
@@ -41,21 +41,21 @@ impl Cipher for Context {
 
     fn rtp_nonce(
         &self,
-        ssrc: u32,
-        ext_seq_num: ExtendedSequenceNumber,
-        nonce: &mut [u8],
+        _ssrc: u32,
+        _ext_seq_num: ExtendedSequenceNumber,
+        _nonce: &mut [u8],
     ) -> Result<usize, Error> {
         Ok(0)
     }
-    fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error> {
+    fn rtcp_nonce(&self, _ssrc: u32, _index: u32, _nonce: &mut [u8]) -> Result<usize, Error> {
         Ok(0)
     }
 
     fn encrypt(
         &self,
-        nonce: &[u8],
-        aad: &[u8],
-        buf: &mut [u8],
+        _nonce: &[u8],
+        _aad: &[u8],
+        _buf: &mut [u8],
         pt_size: usize,
     ) -> Result<usize, Error> {
         Ok(pt_size)
@@ -63,9 +63,9 @@ impl Cipher for Context {
 
     fn decrypt(
         &self,
-        nonce: &[u8],
-        aad: &[u8],
-        buf: &mut [u8],
+        _nonce: &[u8],
+        _aad: &[u8],
+        _buf: &mut [u8],
         ct_size: usize,
     ) -> Result<usize, Error> {
         Ok(ct_size)
@@ -83,7 +83,7 @@ impl ExtensionCipherType for NullCipher {
         ExtensionCipherTypeID::Null
     }
 
-    fn xtn_create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn ExtensionCipher>, Error> {
+    fn xtn_create(&self, _key: &[u8], _salt: &[u8]) -> Result<Box<dyn ExtensionCipher>, Error> {
         Ok(Box::new(Context {}))
     }
 }
@@ -93,7 +93,7 @@ impl CipherType for NullCipher {
         CipherTypeID::Null
     }
 
-    fn create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn Cipher>, Error> {
+    fn create(&self, _key: &[u8], _salt: &[u8]) -> Result<Box<dyn Cipher>, Error> {
         Ok(Box::new(Context {}))
     }
 }

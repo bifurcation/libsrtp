@@ -51,10 +51,6 @@ impl<'a> OffsetReader<'a> {
         Ok(val)
     }
 
-    fn rest(self) -> Range<usize> {
-        self.pos..self.data.len()
-    }
-
     fn close(self) -> usize {
         self.pos
     }
@@ -241,19 +237,10 @@ impl RtpExtensionElement {
 pub struct RtpExtensionReader<'a> {
     reader: OffsetReader<'a>,
     header_size: ElementHeaderSize,
-    pos: usize,
 }
 
 impl<'a> RtpExtensionReader<'a> {
-    fn empty() -> Self {
-        RtpExtensionReader {
-            reader: OffsetReader::new(&mut []),
-            header_size: ElementHeaderSize::OneByte,
-            pos: 0,
-        }
-    }
-
-    fn new(header: &RtpExtensionHeader, data: &'a mut [u8]) -> Result<Self, Error> {
+    pub fn new(header: &RtpExtensionHeader, data: &'a mut [u8]) -> Result<Self, Error> {
         let elem_header_size = match header.defined_by_profile {
             ONE_BYTE_HEADER => ElementHeaderSize::OneByte,
             x if (x & TWO_BYTE_HEADER_MASK) == TWO_BYTE_HEADER => ElementHeaderSize::TwoByte,
@@ -265,7 +252,6 @@ impl<'a> RtpExtensionReader<'a> {
         Ok(RtpExtensionReader {
             reader: OffsetReader::new(data),
             header_size: elem_header_size,
-            pos: 0,
         })
     }
 }

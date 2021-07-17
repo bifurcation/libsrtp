@@ -21,7 +21,7 @@ pub enum ProfileID {
 }
 
 impl ProfileID {
-    fn master_key_size(&self) -> usize {
+    pub fn master_key_size(&self) -> usize {
         match self {
             ProfileID::Aes128CmSha180 => constants::AES_128_KEY_LEN,
             ProfileID::Aes128CmSha132 => constants::AES_128_KEY_LEN,
@@ -32,7 +32,7 @@ impl ProfileID {
         }
     }
 
-    fn master_salt_size(&self) -> usize {
+    pub fn master_salt_size(&self) -> usize {
         match self {
             ProfileID::Aes128CmSha180 => constants::SALT_LEN,
             ProfileID::Aes128CmSha132 => constants::SALT_LEN,

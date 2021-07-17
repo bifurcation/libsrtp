@@ -132,8 +132,6 @@ pub struct SessionKeys {
     pub limit: KeyLimitContext,
 }
 
-const MAX_SRTP_KEY_SIZE: usize = 46; // XXX
-
 impl SessionKeys {
     fn new(
         kernel: &CryptoKernel,
@@ -405,7 +403,7 @@ impl Context {
         }
     }
 
-    fn update_specific_stream(
+    pub fn update_specific_stream(
         &mut self,
         kernel: &CryptoKernel,
         policy: &Policy,
@@ -432,7 +430,7 @@ impl Context {
         Ok(())
     }
 
-    fn update_template_streams(
+    pub fn update_template_streams(
         &mut self,
         kernel: &CryptoKernel,
         policy: &Policy,
@@ -472,11 +470,11 @@ impl Context {
         Ok(())
     }
 
-    fn srtp_protect(&mut self, pkt_data: &mut [u8], pkt_len: usize) -> Result<usize, Error> {
+    pub fn srtp_protect(&mut self, pkt_data: &mut [u8], pkt_len: usize) -> Result<usize, Error> {
         self.srtp_protect_mki(pkt_data, pkt_len, false, 0)
     }
 
-    fn srtp_protect_mki(
+    pub fn srtp_protect_mki(
         &mut self,
         pkt_data: &mut [u8],
         pkt_len: usize,
@@ -509,7 +507,7 @@ impl Context {
         }
 
         // Look up the session keys by MKI
-        let mut sk = match stream.get_session_keys(use_mki, mki_index) {
+        let sk = match stream.get_session_keys(use_mki, mki_index) {
             Some(x) => x,
             None => return Err(Error::BadMki),
         };
@@ -525,7 +523,6 @@ impl Context {
         }
 
         // TODO estimate sequence number and form nonce
-        let nonce = [0u8; 16];
 
         // Encrypt the headers
         /*
@@ -556,11 +553,15 @@ impl Context {
         Ok(pkt.size()) // TODO
     }
 
-    fn srtp_unprotect(&mut self, pkt_data: &mut [u8]) -> Result<usize, Error> {
+    pub fn srtp_unprotect(&mut self, pkt_data: &mut [u8]) -> Result<usize, Error> {
         self.srtp_unprotect_mki(pkt_data, false)
     }
 
-    fn srtp_unprotect_mki(&mut self, pkt_data: &mut [u8], use_mki: bool) -> Result<usize, Error> {
+    pub fn srtp_unprotect_mki(
+        &mut self,
+        pkt_data: &mut [u8],
+        use_mki: bool,
+    ) -> Result<usize, Error> {
         let mut pkt = SrtpPacket::new(pkt_data, pkt_data.len())?;
 
         // Get or create the stream
@@ -586,7 +587,6 @@ impl Context {
         }
 
         // TODO estimate the sequence number and form the nonce
-        let nonce = [0u8; 16];
 
         // Determine if MKI is being used and what session keys should be used
         let sk = if use_mki {

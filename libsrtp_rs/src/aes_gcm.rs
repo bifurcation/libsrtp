@@ -18,7 +18,6 @@ where
     C: NewAead,
 {
     const SALT_SIZE: usize = 12;
-    const NONCE_SIZE: usize = 12;
     const TAG_SIZE: usize = 16;
 
     fn new(key_size: AesKeySize, key: &[u8], salt: &[u8]) -> Result<Self, Error> {

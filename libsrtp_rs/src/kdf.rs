@@ -16,11 +16,8 @@ pub enum KdfLabel {
     RtpHeaderSalt = 0x07,
 }
 
-const MAX_KDF_OUTPUT_SIZE: usize = 46;
-
 pub struct KDF {
     salt: [u8; 16],
-    buffer: [u8; MAX_KDF_OUTPUT_SIZE],
     cipher: Box<dyn Cipher>,
 }
 
@@ -43,7 +40,6 @@ impl KDF {
     ) -> Result<Self, Error> {
         let mut kdf = KDF {
             salt: [0; 16],
-            buffer: [0; MAX_KDF_OUTPUT_SIZE],
             cipher: kernel.cipher(cipher_id, key, salt)?,
         };
 
