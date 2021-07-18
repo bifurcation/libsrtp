@@ -312,6 +312,14 @@ impl ExtendedReplayDB {
         Ok(())
     }
 
+    pub fn should_advance(&self, estimate: ExtendedSequenceNumber) -> Result<bool, Error> {
+        if estimate < self.index && (self.index - estimate > (SEQ_NUM_MEDIAN as u64)) {
+            return Err(Error::PacketIndexOld);
+        }
+
+        Ok(estimate > self.index && (estimate - self.index > (SEQ_NUM_MEDIAN as u64)))
+    }
+
     pub fn estimate(&self, seq: SequenceNumber) -> (ExtendedSequenceNumber, i32) {
         self.index.estimate(seq)
     }

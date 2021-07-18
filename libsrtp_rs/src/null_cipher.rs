@@ -12,16 +12,7 @@ impl ExtensionCipher for Context {
         ExtensionCipherTypeID::Null
     }
 
-    fn rtp_xtn_header_iv(
-        &self,
-        _ssrc: u32,
-        _ext_seq_num: ExtendedSequenceNumber,
-        _nonce: &mut [u8],
-    ) -> Result<usize, Error> {
-        Ok(0)
-    }
-
-    fn init(&mut self, _iv: &[u8]) -> Result<(), Error> {
+    fn init(&mut self, _ssrc: u32, _ext_seq_num: ExtendedSequenceNumber) -> Result<(), Error> {
         Ok(())
     }
 
@@ -51,23 +42,15 @@ impl Cipher for Context {
         Ok(0)
     }
 
-    fn encrypt(
-        &self,
-        _nonce: &[u8],
-        _aad: &[u8],
-        _buf: &mut [u8],
-        pt_size: usize,
-    ) -> Result<usize, Error> {
+    fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn encrypt(&self, _nonce: &[u8], _buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         Ok(pt_size)
     }
 
-    fn decrypt(
-        &self,
-        _nonce: &[u8],
-        _aad: &[u8],
-        _buf: &mut [u8],
-        ct_size: usize,
-    ) -> Result<usize, Error> {
+    fn decrypt(&self, _nonce: &[u8], _buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
         Ok(ct_size)
     }
 

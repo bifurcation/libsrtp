@@ -1,5 +1,4 @@
 use crate::srtp::{Error, SessionKeys};
-use core::iter::Iterator;
 use packed_struct::prelude::*;
 use std::ops::Range;
 
@@ -8,13 +7,20 @@ trait PackedSize {
 }
 
 struct OffsetReader<'a> {
-    data: &'a [u8],
+    data: &'a mut [u8],
     pos: usize,
 }
 
 impl<'a> OffsetReader<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    fn new(data: &'a mut [u8]) -> Self {
         Self { data: data, pos: 0 }
+    }
+
+    fn empty() -> Self {
+        Self {
+            data: &mut [],
+            pos: 0,
+        }
     }
 
     fn skip_zeros(&mut self) -> usize {
@@ -33,7 +39,7 @@ impl<'a> OffsetReader<'a> {
         self.data.len() - self.pos
     }
 
-    fn read(&mut self, size: usize) -> Result<Range<usize>, Error> {
+    fn read<'b>(&'b mut self, size: usize) -> Result<(&'b mut [u8], Range<usize>), Error> {
         let start = self.pos;
         let end = self.pos + size;
         if end > self.data.len() {
@@ -41,12 +47,11 @@ impl<'a> OffsetReader<'a> {
         }
 
         self.pos += size;
-        Ok(start..end)
+        Ok((&mut self.data[start..end], start..end))
     }
 
     fn unpack<T: PackedStruct + PackedSize>(&mut self) -> Result<T, Error> {
-        let val_range = self.read(T::PACKED_SIZE)?;
-        let val_data = &self.data[val_range.clone()];
+        let (val_data, _val_range) = self.read(T::PACKED_SIZE)?;
         let val = T::unpack_from_slice(val_data).or(Err(Error::ParseError))?;
         Ok(val)
     }
@@ -202,36 +207,10 @@ pub enum ElementHeaderSize {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct RtpExtensionElement {
+pub struct RtpExtensionElement<'a> {
     pub id: u8,
-    pub skip: usize,
     pub range: Range<usize>,
-}
-
-impl RtpExtensionElement {
-    fn new(
-        header_size: ElementHeaderSize,
-        reader: &mut OffsetReader,
-    ) -> Result<RtpExtensionElement, Error> {
-        match header_size {
-            ElementHeaderSize::OneByte => {
-                let header = reader.unpack::<OneByteElementHeader>()?;
-                Ok(RtpExtensionElement {
-                    id: header.id,
-                    skip: OneByteElementHeader::PACKED_SIZE,
-                    range: reader.read((header.length + 1) as usize)?,
-                })
-            }
-            ElementHeaderSize::TwoByte => {
-                let header = reader.unpack::<TwoByteElementHeader>()?;
-                Ok(RtpExtensionElement {
-                    id: header.id,
-                    skip: TwoByteElementHeader::PACKED_SIZE,
-                    range: reader.read(header.length as usize)?,
-                })
-            }
-        }
-    }
+    pub data: &'a mut [u8],
 }
 
 pub struct RtpExtensionReader<'a> {
@@ -247,39 +226,67 @@ impl<'a> RtpExtensionReader<'a> {
             _ => return Err(Error::BadParam),
         };
 
-        // TODO Pre-validate that the extensions parse correctly
-
         Ok(RtpExtensionReader {
             reader: OffsetReader::new(data),
             header_size: elem_header_size,
         })
     }
-}
 
-impl<'a> Iterator for RtpExtensionReader<'a> {
-    type Item = RtpExtensionElement;
+    pub fn empty() -> Self {
+        RtpExtensionReader {
+            reader: OffsetReader::empty(),
+            header_size: ElementHeaderSize::OneByte,
+        }
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
+    // Effectively a fallible iterator interface that borrows internal data:
+    //   Ok(Some(x)) - Next item is x
+    //   Ok(None) - No more items
+    //   Err(err) - Parse error
+    pub fn next<'b>(&'b mut self) -> Result<Option<RtpExtensionElement<'b>>, Error> {
         // Skip padding bytes
-        let padding_size = self.reader.skip_zeros();
+        self.reader.skip_zeros();
 
         // If we've reached the end of the buffer, there's nothing more to do
         if self.reader.remaining() == 0 {
-            return None;
+            return Ok(None);
         }
 
         // Parse an extension element
-        // XXX(RLB) This throws away error information, so a packet with malformed extensions will
-        // not result in an error.  Instead, the extensions will be processed up to the point where
-        // the error occurs.  To fix this, we should either return errors (and thus not satisfy
-        // Iterator), or pre-validate that the extensions are correct in new().
-        match RtpExtensionElement::new(self.header_size, &mut self.reader) {
-            Ok(mut elem) => {
-                elem.skip += padding_size;
-                Some(elem)
+        Ok(Some(match self.header_size {
+            ElementHeaderSize::OneByte => {
+                let header = self.reader.unpack::<OneByteElementHeader>()?;
+                let (data, range) = self.reader.read((header.length + 1) as usize)?;
+                RtpExtensionElement {
+                    id: header.id,
+                    range: range,
+                    data: data,
+                }
             }
-            Err(_) => None,
+            ElementHeaderSize::TwoByte => {
+                let header = self.reader.unpack::<TwoByteElementHeader>()?;
+                let (data, range) = self.reader.read(header.length as usize)?;
+                RtpExtensionElement {
+                    id: header.id,
+                    range: range,
+                    data: data,
+                }
+            }
+        }))
+    }
+
+    pub fn apply<F>(&mut self, mut f: F) -> Result<(), Error>
+    where
+        F: FnMut(RtpExtensionElement) -> Result<(), Error>,
+    {
+        loop {
+            match self.next() {
+                Ok(Some(elem)) => f(elem)?,
+                Ok(None) => break,
+                Err(err) => return Err(err),
+            }
         }
+        Ok(())
     }
 }
 
@@ -299,7 +306,7 @@ pub struct SrtpPacket<'a> {
 
 impl<'a> SrtpPacket<'a> {
     pub fn new(data: &'a mut [u8], pkt_len: usize) -> Result<Self, Error> {
-        let mut r = OffsetReader::new(&data[..pkt_len]);
+        let mut r = OffsetReader::new(&mut data[..pkt_len]);
 
         // Parse the RTP header and CSRCs
         let header = r.unpack::<RtpHeader>()?;
@@ -357,8 +364,23 @@ impl<'a> SrtpPacket<'a> {
         None
     }
 
-    pub fn extension_data<'b>(&'b mut self) -> &'b mut [u8] {
-        &mut self.data[self.ext_start..self.payload_start]
+    pub fn extensions<'b>(&'b mut self) -> Result<RtpExtensionReader<'b>, Error> {
+        if self.ext_header.is_none() {
+            return Ok(RtpExtensionReader::empty());
+        }
+
+        let ext_header = self.ext_header.as_ref().unwrap();
+        let header_size = match ext_header.defined_by_profile {
+            ONE_BYTE_HEADER => ElementHeaderSize::OneByte,
+            x if (x & TWO_BYTE_HEADER_MASK) == TWO_BYTE_HEADER => ElementHeaderSize::TwoByte,
+            _ => return Err(Error::BadParam),
+        };
+
+        let ext_data = &mut self.data[self.ext_start..self.payload_start];
+        Ok(RtpExtensionReader {
+            reader: OffsetReader::new(ext_data),
+            header_size: header_size,
+        })
     }
 
     pub fn aad<'b>(&'b self) -> &'b [u8] {
@@ -470,28 +492,32 @@ mod test {
             0x10, 0xaa, 0x21, 0xbb, 0xbb, 0x00, 0x00, 0x33, 0xcc, 0xcc, 0xcc, 0xcc,
         ];
 
-        let expected_extensions: [RtpExtensionElement; 3] = [
+        let expected_extensions = &[
             RtpExtensionElement {
                 id: 1,
-                skip: 1,
                 range: 1..2,
+                data: &mut [0xaa],
             },
             RtpExtensionElement {
                 id: 2,
-                skip: 1,
                 range: 3..5,
+                data: &mut [0xbb, 0xbb],
             },
             RtpExtensionElement {
                 id: 3,
-                skip: 3,
                 range: 8..12,
+                data: &mut [0xcc, 0xcc, 0xcc, 0xcc],
             },
         ];
 
-        let reader = RtpExtensionReader::new(&ext_header, &mut ext_data)?;
-        for (actual, expected) in reader.zip(&expected_extensions) {
-            assert_eq!(&actual, expected);
-        }
+        let mut reader = RtpExtensionReader::new(&ext_header, &mut ext_data)?;
+        let mut i = 0usize;
+        reader.apply(|ext| {
+            assert_eq!(ext, expected_extensions[i]);
+            i += 1;
+            Ok(())
+        })?;
+        assert_eq!(i, expected_extensions.len());
 
         Ok(())
     }
@@ -517,28 +543,37 @@ mod test {
             0x01, 0x00, 0x02, 0x01, 0xaa, 0x00, 0x03, 0x04, 0xbb, 0xbb, 0xbb, 0xbb,
         ];
 
-        let expected_extensions: [RtpExtensionElement; 3] = [
+        let expected_extensions: &[RtpExtensionElement] = &[
             RtpExtensionElement {
                 id: 1,
-                skip: 2,
                 range: 2..2,
+                data: &mut [],
             },
             RtpExtensionElement {
                 id: 2,
-                skip: 2,
                 range: 4..5,
+                data: &mut [0xaa],
             },
             RtpExtensionElement {
                 id: 3,
-                skip: 3,
                 range: 8..12,
+                data: &mut [0xbb, 0xbb, 0xbb, 0xbb],
             },
         ];
 
-        let reader = RtpExtensionReader::new(&ext_header, &mut ext_data)?;
-        for (actual, expected) in reader.zip(&expected_extensions) {
-            assert_eq!(&actual, expected);
+        let mut reader = RtpExtensionReader::new(&ext_header, &mut ext_data)?;
+        let mut i = 0usize;
+        loop {
+            match reader.next() {
+                Ok(Some(ext)) => {
+                    assert_eq!(ext, expected_extensions[i]);
+                    i += 1
+                }
+                Ok(None) => break,
+                Err(err) => return Err(err),
+            }
         }
+        assert_eq!(i, expected_extensions.len());
 
         Ok(())
     }
@@ -581,14 +616,6 @@ mod test {
         0xf4, 0xb1, 0xb7, 0x59, 0x71, 0x9e, 0xb5, 0xbc, 0x11, 0x3b, 0x9f, 0xf1, 0xd4, 0x0c, 0xd2,
         0x5a,
     ];
-    const PT_EXTENSION_DATA: &'static [u8] = &[
-        0x17, 0x41, 0x42, 0x73, 0xa4, 0x75, 0x26, 0x27, 0x48, 0x22, 0x00, 0x00, 0xc8, 0x30, 0x8e,
-        0x46, 0x55, 0x99, 0x63, 0x86, 0xb3, 0x95, 0xfb, 0x00,
-    ];
-    const CT_EXTENSION_DATA: &'static [u8] = &[
-        0x17, 0x12, 0xe0, 0x20, 0x5b, 0xfa, 0x94, 0x9b, 0x1c, 0x22, 0x00, 0x00, 0xc8, 0x30, 0xbb,
-        0x46, 0x73, 0x27, 0x78, 0xd9, 0x92, 0x9a, 0xab, 0x00,
-    ];
     const AAD: &'static [u8] = &[
         0x90, 0x0f, 0x12, 0x34, 0xde, 0xca, 0xfb, 0xad, 0xca, 0xfe, 0xba, 0xbe, 0xbe, 0xde, 0x00,
         0x06, 0x17, 0x12, 0xe0, 0x20, 0x5b, 0xfa, 0x94, 0x9b, 0x1c, 0x22, 0x00, 0x00, 0xc8, 0x30,
@@ -609,7 +636,7 @@ mod test {
         let pt_size = PLAINTEXT_PACKET.len();
         let mut pkt_data = [0u8; 100];
         pkt_data[..pt_size].copy_from_slice(PLAINTEXT_PACKET);
-        let mut pkt = SrtpPacket::new(&mut pkt_data, pt_size)?;
+        let pkt = SrtpPacket::new(&mut pkt_data, pt_size)?;
 
         // Verify that header values are correct
         assert_eq!(pkt.header.v, 2);
@@ -626,7 +653,6 @@ mod test {
         assert!(pkt.ext_header.is_some());
         assert_eq!(pkt.ext_header.as_ref().unwrap().defined_by_profile, 0xbede);
         assert_eq!(pkt.ext_header.as_ref().unwrap().length_u32, 6);
-        assert_eq!(pkt.extension_data(), PT_EXTENSION_DATA);
         Ok(())
     }
 
@@ -656,7 +682,10 @@ mod test {
         let mut pkt = SrtpPacket::new(&mut pkt_data, pkt_size)?;
 
         // Emulate encrypting header
-        xor_eq(pkt.extension_data(), EXTENSION_KEYSTREAM);
+        pkt.extensions()?.apply(|ext| {
+            xor_eq(ext.data, &EXTENSION_KEYSTREAM[ext.range]);
+            Ok(())
+        })?;
 
         // Verify that AAD is as expected
         assert_eq!(pkt.aad(), AAD);
@@ -664,7 +693,7 @@ mod test {
         // Emulate encrypting payload
         let pt_size = pkt.payload_size();
         let ct_size = encrypt(pkt.payload_for_encrypt(), pt_size);
-        pkt.set_payload_size(ct_size);
+        pkt.set_payload_size(ct_size)?;
 
         // Append MKI
         pkt.append(MKI.len())?.copy_from_slice(MKI);
@@ -684,8 +713,6 @@ mod test {
 
     #[test]
     fn test_srtp_unprotect_parsing() -> Result<(), Error> {
-        let null_cipher = NullCipher;
-        let hmac_sha1 = NativeHMAC;
         let mut sks = vec![SessionKeys {
             rtp_cipher: NullCipher {}.create(&[], &[])?,
             rtp_xtn_hdr_cipher: NullCipher {}.xtn_create(&[], &[])?,
@@ -703,7 +730,7 @@ mod test {
         let mut pkt = SrtpPacket::new(&mut pkt_data, pkt_size)?;
 
         // Find MKI
-        let sk = pkt.find_mki(&mut sks).ok_or(Error::Fail)?;
+        pkt.find_mki(&mut sks).ok_or(Error::Fail)?;
 
         // Verify that auth input is as expected
         assert_eq!(pkt.auth_data(), AUTH_DATA);
@@ -725,7 +752,10 @@ mod test {
         pkt.set_payload_size(pt_size)?;
 
         // Emulate decrypting extension
-        xor_eq(pkt.extension_data(), EXTENSION_KEYSTREAM);
+        pkt.extensions()?.apply(|ext| {
+            xor_eq(ext.data, &EXTENSION_KEYSTREAM[ext.range]);
+            Ok(())
+        })?;
 
         // Verify that final packet content is correct
         let pkt_size = pkt.size();
