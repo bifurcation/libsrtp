@@ -96,16 +96,12 @@ where
         self.key_size.as_stream_icm_id()
     }
 
-    fn rtp_xtn_header_iv(
-        &self,
-        ssrc: u32,
-        ext_seq_num: ExtendedSequenceNumber,
-        nonce: &mut [u8],
-    ) -> Result<usize, Error> {
-        self.make_rtp_nonce(ssrc, ext_seq_num, nonce)
-    }
+    fn init(&mut self, ssrc: u32, ext_seq_num: ExtendedSequenceNumber) -> Result<(), Error> {
+        let mut iv = [0u8; 16];
+        self.make_rtp_nonce(ssrc, ext_seq_num, &mut iv[..Self::NONCE_SIZE])?;
+        println!("iv: {:02x?}", iv);
 
-    fn init(&mut self, iv: &[u8]) -> Result<(), Error> {
+        let iv = GenericArray::from_slice(&iv);
         let key = GenericArray::from_slice(self.key());
         self.cipher = Some(Ctr128BE::new(&key, iv.into()));
         Ok(())
@@ -116,16 +112,17 @@ where
             return Ok(());
         }
 
-        if self.cipher.is_none() {
-            return Err(Error::CipherFail);
+        let size = range.end - range.start;
+        if buffer.len() < size {
+            return Err(Error::BadParam);
         }
 
-        let cipher = self.cipher.as_mut().unwrap();
+        let cipher = self.cipher.as_mut().ok_or(Error::CipherFail)?;
         cipher
             .try_seek(range.start)
             .map_err(|_| Error::CipherFail)?;
         cipher
-            .try_apply_keystream(&mut buffer[range])
+            .try_apply_keystream(&mut buffer[..size])
             .map_err(|_| Error::CipherFail)?;
         Ok(())
     }
@@ -158,13 +155,11 @@ where
         self.rtp_nonce(ssrc, index.into(), nonce)
     }
 
-    fn encrypt(
-        &self,
-        nonce: &[u8],
-        _aad: &[u8],
-        buf: &mut [u8],
-        pt_size: usize,
-    ) -> Result<usize, Error> {
+    fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn encrypt(&self, nonce: &[u8], buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         let key = GenericArray::from_slice(self.key());
         Ctr128BE::<C>::new(&key, nonce.into())
             .try_apply_keystream(&mut buf[..pt_size])
@@ -172,14 +167,8 @@ where
             .map_err(|_| Error::CipherFail)
     }
 
-    fn decrypt(
-        &self,
-        nonce: &[u8],
-        aad: &[u8],
-        buf: &mut [u8],
-        ct_size: usize,
-    ) -> Result<usize, Error> {
-        self.encrypt(nonce, aad, buf, ct_size)
+    fn decrypt(&self, nonce: &[u8], buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
+        self.encrypt(nonce, buf, ct_size)
     }
 
     fn clone_inner(&self) -> Box<dyn Cipher> {
@@ -310,11 +299,6 @@ mod tests {
         ];
         let ssrc: u32 = 0xcafebabe;
         let ext_seq_num: ExtendedSequenceNumber = 0x0000001234;
-        let expected_iv: [u8; 16] = [
-            // ab01818174c40d39a3781f7c2d27 ^ 00000000cafebabe000000001234 || 0000
-            0xab, 0x01, 0x81, 0x81, 0xbe, 0x3a, 0xb7, 0x87, 0xa3, 0x78, 0x1f, 0x7c, 0x3f, 0x13,
-            0x00, 0x00,
-        ];
         let ranges: &'static [Range<usize>] = &[1..9, 14..15, 16..23];
         let pt: &'static [u8] = &[
             0x17, 0x41, 0x42, 0x73, 0xa4, 0x75, 0x26, 0x27, 0x48, 0x22, 0x00, 0x00, 0xc8, 0x30,
@@ -329,23 +313,12 @@ mod tests {
             Box::new(NativeAesIcm::new(AesKeySize::Aes128));
         let mut cipher = cipher_type.xtn_create(&key, &salt)?;
 
-        // Verify correct nonce formation
-        let mut iv: [u8; 16] = Default::default();
-        cipher.rtp_xtn_header_iv(ssrc, ext_seq_num, &mut iv)?;
-        assert_eq!(iv, expected_iv);
-
-        // Generate raw keystream
-        let mut keystream = [0u8; 24];
-        cipher.init(&iv)?;
-        cipher.xor_key(&mut keystream, 0..24);
-        println!("keystream: {:02x?}", keystream);
-
         // Verify correct encryption
         let mut encrypt_buffer = [0u8; 24];
         encrypt_buffer.copy_from_slice(pt);
-        cipher.init(&iv)?;
+        cipher.init(ssrc, ext_seq_num)?;
         for r in ranges {
-            cipher.xor_key(&mut encrypt_buffer, r.clone())?;
+            cipher.xor_key(&mut encrypt_buffer[r.clone()], r.clone())?;
         }
         println!("enc_buf:   {:02x?}", encrypt_buffer);
         println!("ct:        {:02x?}", ct);
@@ -378,7 +351,7 @@ mod tests {
         ];
 
         let cipher_type: Box<dyn CipherType> = Box::new(NativeAesIcm::new(AesKeySize::Aes128));
-        let cipher = cipher_type.create(&key, &salt)?;
+        let mut cipher = cipher_type.create(&key, &salt)?;
 
         // Verify correct nonce formation
         let mut nonce: [u8; 16] = Default::default();
@@ -388,12 +361,14 @@ mod tests {
         // Verify correct encryption
         let mut enc_buffer = [0u8; 16];
         enc_buffer[..pt.len()].copy_from_slice(&pt);
-        let ct_size = cipher.encrypt(&nonce, &aad, &mut enc_buffer, pt.len())?;
+        cipher.set_aad(&aad)?;
+        let ct_size = cipher.encrypt(&nonce, &mut enc_buffer, pt.len())?;
         assert_eq!(ct_size, ct.len());
         assert_eq!(enc_buffer, ct);
 
         // Verify correct decryption
-        let pt_size = cipher.decrypt(&nonce, &aad, &mut enc_buffer, ct.len())?;
+        cipher.set_aad(&aad)?;
+        let pt_size = cipher.decrypt(&nonce, &mut enc_buffer, ct.len())?;
         assert_eq!(pt_size, pt.len());
         assert_eq!(&enc_buffer[..pt_size], &pt);
 

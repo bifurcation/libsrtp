@@ -56,7 +56,7 @@ impl KDF {
         let label_u8: u8 = label.into();
         nonce[7] ^= label_u8;
 
-        self.cipher.encrypt(&nonce, &[], buffer, buffer.len())?;
+        self.cipher.encrypt(&nonce, buffer, buffer.len())?;
         Ok(())
     }
 }

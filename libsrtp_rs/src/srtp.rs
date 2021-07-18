@@ -26,6 +26,7 @@ pub enum Error {
     KeyExpired = 15, // can't use key any more
     ParseError = 21, // error parsing data
     BadMki = 25,     // error MKI present in packet is invalid
+    PacketIndexOld = 26, // packet index is too old to consider
 
                      /*
                      alloc_fail = 3,     // couldn't allocate memory
@@ -39,7 +40,6 @@ pub enum Error {
                      encode_err = 22,    // error encoding data
                      semaphore_err = 23, // error while using semaphores
                      pfkey_err = 24,     // error while using pfkey
-                     pkt_idx_old = 26,   // packet index is too old to consider
                      pkt_idx_adv = 27,   // packet index advanced, reset needed
                      */
 }
@@ -212,7 +212,7 @@ mod test {
         let rtp_policy = CryptoPolicy::rtp_default();
         let rtcp_policy = CryptoPolicy::rtcp_default();
 
-        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtp_policy)?;
+        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtcp_policy)?;
         // TODO verify that the keys are right
 
         Ok(())
@@ -235,7 +235,7 @@ mod test {
         let rtp_policy = CryptoPolicy::aes_gcm_128();
         let rtcp_policy = CryptoPolicy::aes_gcm_128();
 
-        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtp_policy)?;
+        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtcp_policy)?;
         // TODO verify that the keys are right
 
         Ok(())
@@ -253,7 +253,7 @@ struct Stream {
     direction: Direction,
     allow_repeat_tx: bool,
     enc_xtn_hdr: Vec<ExtensionHeaderId>,
-    pending_roc: u32,
+    pending_roc: Option<RolloverCounter>,
 }
 
 impl Stream {
@@ -278,7 +278,7 @@ impl Stream {
             direction: Direction::Unknown,
             allow_repeat_tx: policy.allow_repeat_tx,
             enc_xtn_hdr: policy.enc_xtn_hdr.clone(),
-            pending_roc: 0,
+            pending_roc: None,
         })
     }
 
@@ -299,7 +299,7 @@ impl Stream {
         stream.rtcp_rdb = ReplayDB::new();
 
         // Reset the pending ROC
-        stream.pending_roc = 0;
+        stream.pending_roc = None;
 
         Ok(stream)
     }
@@ -318,6 +318,140 @@ impl Stream {
         }
 
         Some(&mut self.session_keys[mki_index])
+    }
+
+    pub fn estimate_packet_index(
+        &self,
+        seq: SequenceNumber,
+    ) -> Result<(ExtendedSequenceNumber, i32, bool), Error> {
+        if self.pending_roc.is_some() {
+            let pending_roc = self.pending_roc.unwrap();
+            let index = self.rtp_rdbx.packet_index();
+            let estimate = ExtendedSequenceNumber::from_roc_seq(pending_roc, seq);
+            let delta = ((estimate as i64) - (index as i64)) as i32;
+
+            if self.rtp_rdbx.should_advance(estimate)? {
+                return Ok((estimate, 0, true));
+            }
+
+            return Ok((estimate, delta, false));
+        }
+
+        let (estimate, delta) = self.rtp_rdbx.estimate(seq);
+        Ok((estimate, delta, false))
+    }
+
+    pub fn encrypt(
+        &mut self,
+        pkt: &mut SrtpPacket,
+        use_mki: bool,
+        mki_index: usize,
+    ) -> Result<usize, Error> {
+        // Estimate the packet index
+        let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
+        if advance_index {
+            // XXX(RLB) set_packet_index?
+            self.rtp_rdbx.set_roc_seq(index.roc(), index.seq())?;
+            self.pending_roc = None;
+            self.rtp_rdbx.add(delta)?;
+        } else {
+            match self.rtp_rdbx.check(delta) {
+                Ok(_) => {}
+                Err(Error::ReplayFail) if self.allow_repeat_tx => {}
+                Err(err) => return Err(err),
+            };
+            self.rtp_rdbx.add(delta)?;
+        }
+
+        // Look up the session keys by MKI
+        let sk = match self.get_session_keys(use_mki, mki_index) {
+            Some(x) => x,
+            None => return Err(Error::BadMki),
+        };
+
+        // Update the key usage limit
+        match sk.limit.update() {
+            KeyEvent::Normal => {}
+            KeyEvent::SoftLimit => { /* TODO report soft limit */ }
+            KeyEvent::HardLimit => {
+                // TODO report hard limit
+                return Err(Error::KeyExpired);
+            }
+        }
+
+        // Encrypt the headers
+        sk.rtp_xtn_hdr_cipher.init(pkt.header.ssrc, index)?;
+        pkt.extensions()?
+            .apply(|ext| sk.rtp_xtn_hdr_cipher.xor_key(ext.data, ext.range))?;
+
+        // Encrypt the payload
+        let mut nonce = [0u8; 16];
+        let nonce_size = sk.rtp_cipher.id().nonce_size();
+        let nonce = &mut nonce[..nonce_size];
+        sk.rtp_cipher.rtp_nonce(pkt.header.ssrc, index, nonce)?;
+
+        sk.rtp_cipher.set_aad(pkt.aad())?;
+        let pt_size = pkt.payload_size();
+        let ct_size = sk
+            .rtp_cipher
+            .encrypt(nonce, pkt.payload_for_encrypt(), pt_size)?;
+        pkt.set_payload_size(ct_size)?;
+
+        // Write the MKI
+        pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
+
+        // Write the tag
+        let mut tag = [0u8; 128]; // TODO fix some max size
+        let tag_size = sk.rtp_auth.tag_size();
+        sk.rtp_auth.compute(pkt.auth_data(), &mut tag)?;
+        pkt.append(tag_size)?.copy_from_slice(&tag[..tag_size]);
+
+        Ok(pkt.size())
+    }
+
+    pub fn decrypt(&mut self, pkt: &mut SrtpPacket, use_mki: bool) -> Result<(), Error> {
+        // Determine which session keys should be used
+        let sk = if use_mki {
+            pkt.find_mki(&mut stream.session_keys)
+                .ok_or(Error::BadMki)?
+        } else {
+            &mut stream.session_keys[0]
+        };
+
+        // Verify the authentication tag
+        let mut tag_buf = [0u8; 128]; // TODO fix some max size
+        let tag_size = sk.rtp_auth.tag_size();
+        let tag = &mut tag_buf[..tag_size];
+        sk.rtp_auth.compute(pkt.auth_data(), tag)?;
+        if !constant_time_eq(tag, pkt.last(tag_size)?) {
+            return Err(Error::AuthFail);
+        }
+
+        // Strip the auth tag and MKI
+        pkt.strip(tag_size)?;
+        if use_mki {
+            pkt.strip(sk.mki_id.len())?;
+        }
+
+        // Decrypt the headers
+        sk.rtp_xtn_hdr_cipher.init(pkt.header.ssrc, index)?;
+        pkt.extensions()?
+            .apply(|ext| sk.rtp_xtn_hdr_cipher.xor_key(ext.data, ext.range))?;
+
+        // Decrypt the payload
+        let mut nonce = [0u8; 16];
+        let nonce_size = sk.rtp_cipher.id().nonce_size();
+        let nonce = &mut nonce[..nonce_size];
+        sk.rtp_cipher.rtp_nonce(pkt.header.ssrc, index, nonce)?;
+
+        sk.rtp_cipher.set_aad(pkt.aad())?;
+        let ct_size = pkt.payload_size();
+        let pt_size = sk
+            .rtp_cipher
+            .encrypt(nonce, pkt.payload_for_decrypt(), ct_size)?;
+        pkt.set_payload_size(pt_size)?;
+
+        Ok(pkt.size())
     }
 }
 
@@ -506,51 +640,7 @@ impl Context {
             return Err(Error::Fail); // TODO report ssrc collision
         }
 
-        // Look up the session keys by MKI
-        let sk = match stream.get_session_keys(use_mki, mki_index) {
-            Some(x) => x,
-            None => return Err(Error::BadMki),
-        };
-
-        // Update the key usage limit
-        match sk.limit.update() {
-            KeyEvent::Normal => {}
-            KeyEvent::SoftLimit => { /* TODO report soft limit */ }
-            KeyEvent::HardLimit => {
-                // TODO report hard limit
-                return Err(Error::KeyExpired);
-            }
-        }
-
-        // TODO estimate sequence number and form nonce
-
-        // Encrypt the headers
-        /*
-        for ext in pkt.extension() {
-            // TODO encrypt header extension
-        }
-        */
-
-        // Encrypt the payload
-        // TODO AEAD-ish
-        /*
-        let pt_size = pkt.payload_size();
-        sk.rtp_cipher.set_iv(&nonce, CipherDirection::Encrypt)?;
-        sk.rtp_cipher.set_aad(pkt.aad())?;
-        let ct_size = sk.rtp_cipher.encrypt(pkt.payload(), pt_size)?;
-        pkt.set_payload_size(ct_size)?;
-        */
-
-        // Write the MKI
-        pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
-
-        // Write the tag
-        let mut tag = [0u8; 128]; // TODO fix some max size
-        let tag_size = sk.rtp_auth.tag_size();
-        sk.rtp_auth.compute(pkt.auth_data(), &mut tag)?;
-        pkt.append(tag_size)?.copy_from_slice(&tag[..tag_size]);
-
-        Ok(pkt.size()) // TODO
+        stream.encrypt(&mut pkt, use_mki, mki_index)
     }
 
     pub fn srtp_unprotect(&mut self, pkt_data: &mut [u8]) -> Result<usize, Error> {
@@ -565,14 +655,18 @@ impl Context {
         let mut pkt = SrtpPacket::new(pkt_data, pkt_data.len())?;
 
         // Get or create the stream
-        let stream = match self.get_stream(pkt.header.ssrc) {
-            Some(x) => &mut self.streams[x],
+        // TODO Add replay checks
+        let (stream, index) = match self.get_stream(pkt.header.ssrc) {
             None => {
-                if self.stream_template.is_none() {
-                    return Err(Error::NoContext);
-                }
-
-                self.stream_template.as_mut().unwrap()
+                let stream = self.stream_template.as_mut().ok_or(Error::NoContext)?;
+                let index = ExtendedSequenceNumber::from_roc_seq(0, pkt.header.seq);
+                (stream, index)
+            }
+            Some(x) => {
+                let stream = &mut self.streams[x];
+                let (index, _delta, _advance_index) =
+                    stream.estimate_packet_index(pkt.header.seq)?;
+                (stream, index)
             }
         };
 
@@ -586,52 +680,12 @@ impl Context {
             return Err(Error::Fail);
         }
 
-        // TODO estimate the sequence number and form the nonce
-
-        // Determine if MKI is being used and what session keys should be used
-        let sk = if use_mki {
-            pkt.find_mki(&mut stream.session_keys)
-                .ok_or(Error::BadMki)?
-        } else {
-            &mut stream.session_keys[0]
-        };
-
-        // Verify the authentication tag
-        let mut tag_buf = [0u8; 128]; // TODO fix some max size
-        let tag_size = sk.rtp_auth.tag_size();
-        let tag = &mut tag_buf[..tag_size];
-        sk.rtp_auth.compute(pkt.auth_data(), tag)?;
-        if !constant_time_eq(tag, pkt.last(tag_size)?) {
-            return Err(Error::AuthFail);
-        }
+        // Attempt to authenticate and decrypt the packet
+        stream.decrypt(&mut pkt, use_mki)
 
         // TODO update usage limits
         // TODO convert to real stream
         // TODO update replay DB
-
-        // Strip the auth tag and MKI
-        pkt.strip(tag_size)?;
-        if use_mki {
-            pkt.strip(sk.mki_id.len())?;
-        }
-
-        // Decrypt the headers
-        /*
-        for ext in pkt.extension() {
-            // TODO encrypt header extension
-        }
-        */
-
-        // Decrypt the payload
-        /*
-        let ct_size = pkt.payload_size();
-        sk.rtp_cipher.set_iv(&nonce, CipherDirection::Decrypt)?;
-        sk.rtp_cipher.set_aad(pkt.aad())?;
-        let pt_size = sk.rtp_cipher.decrypt(pkt.payload(), ct_size)?;
-        pkt.set_payload_size(pt_size)?;
-        */
-
-        Ok(pkt.size())
     }
 
     // TODO srtcp_protect

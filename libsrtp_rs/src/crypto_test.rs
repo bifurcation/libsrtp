@@ -1,6 +1,7 @@
 use crate::crypto_kernel::{
     AuthType, AuthTypeID, CipherType, CipherTypeID, ExtensionCipherType, ExtensionCipherTypeID,
 };
+use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 use std::ops::Range;
 
@@ -11,7 +12,8 @@ struct ExtensionCipherTest {
     id: ExtensionCipherTypeID,
     key: &'static [u8],
     salt: &'static [u8],
-    iv: &'static [u8],
+    ssrc: u32,
+    index: ExtendedSequenceNumber,
     ranges: &'static [Range<usize>],
     plaintext: &'static [u8],
     ciphertext: &'static [u8],
@@ -20,13 +22,13 @@ struct ExtensionCipherTest {
 impl ExtensionCipherTest {
     fn run(&self, xtn_cipher_type: &dyn ExtensionCipherType) -> Result<(), Error> {
         let mut cipher = xtn_cipher_type.xtn_create(self.key, self.salt)?;
-        cipher.init(self.iv)?;
+        cipher.init(self.ssrc, self.index)?;
 
         let mut enc_vec = vec![0u8; self.plaintext.len()];
         let enc_buffer = enc_vec.as_mut_slice();
         enc_buffer.copy_from_slice(self.plaintext);
         for r in self.ranges {
-            cipher.xor_key(enc_buffer, r.clone())?;
+            cipher.xor_key(&mut enc_buffer[r.clone()], r.clone())?;
         }
         if enc_buffer != self.ciphertext {
             return Err(Error::AlgoFail);
@@ -41,7 +43,8 @@ const XTN_CIPHER_TEST_DATA: &'static [ExtensionCipherTest] = &[
         id: ExtensionCipherTypeID::Null,
         key: &[],
         salt: &[],
-        iv: &[],
+        ssrc: 0,
+        index: 0,
         ranges: &[2..5, 7..10, 12..13],
         plaintext: &[
             0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
@@ -59,10 +62,8 @@ const XTN_CIPHER_TEST_DATA: &'static [ExtensionCipherTest] = &[
         salt: &[
             0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
         ],
-        iv: &[
-            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
-            0x00, 0x00,
-        ],
+        ssrc: 0,
+        index: 0,
         ranges: &[2..5, 7..10, 12..13],
         plaintext: &[0; 13],
         ciphertext: &[
@@ -78,10 +79,8 @@ const XTN_CIPHER_TEST_DATA: &'static [ExtensionCipherTest] = &[
         salt: &[
             0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
         ],
-        iv: &[
-            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
-            0x00, 0x00,
-        ],
+        ssrc: 0,
+        index: 0,
         ranges: &[2..5, 7..10, 12..13],
         plaintext: &[0; 13],
         ciphertext: &[
@@ -98,10 +97,8 @@ const XTN_CIPHER_TEST_DATA: &'static [ExtensionCipherTest] = &[
         salt: &[
             0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
         ],
-        iv: &[
-            0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
-            0x00, 0x00,
-        ],
+        ssrc: 0,
+        index: 0,
         ranges: &[2..5, 7..10, 12..13],
         plaintext: &[0; 13],
         ciphertext: &[
@@ -139,16 +136,19 @@ struct CipherTest {
 
 impl CipherTest {
     fn run(&self, cipher_type: &dyn CipherType) -> Result<(), Error> {
-        let cipher = cipher_type.create(self.key, self.salt)?;
+        let mut cipher = cipher_type.create(self.key, self.salt)?;
 
         let pt_size = self.plaintext.len();
         let ct_size = self.ciphertext.len();
+
+        // TODO Verify nonce formation
 
         // Encrypt
         let mut enc_vec = vec![0u8; ct_size];
         let enc_buffer = enc_vec.as_mut_slice();
         enc_buffer[..pt_size].copy_from_slice(self.plaintext);
-        let enc_len = cipher.encrypt(self.nonce, self.aad, enc_buffer, pt_size)?;
+        cipher.set_aad(self.aad)?;
+        let enc_len = cipher.encrypt(self.nonce, enc_buffer, pt_size)?;
         if enc_len != ct_size {
             return Err(Error::AlgoFail);
         }
@@ -160,7 +160,8 @@ impl CipherTest {
         let mut dec_vec = vec![0u8; ct_size];
         let dec_buffer = dec_vec.as_mut_slice();
         dec_buffer.copy_from_slice(self.ciphertext);
-        let dec_len = cipher.decrypt(self.nonce, self.aad, dec_buffer, ct_size)?;
+        cipher.set_aad(self.aad)?;
+        let dec_len = cipher.decrypt(self.nonce, dec_buffer, ct_size)?;
         if dec_len != pt_size {
             return Err(Error::AlgoFail);
         }

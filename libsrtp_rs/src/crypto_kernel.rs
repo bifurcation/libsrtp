@@ -132,13 +132,10 @@ impl ExtensionCipherTypeID {
 
 pub trait ExtensionCipher {
     fn xtn_id(&self) -> ExtensionCipherTypeID;
-    fn rtp_xtn_header_iv(
-        &self,
-        ssrc: u32,
-        ext_seq_num: ExtendedSequenceNumber,
-        nonce: &mut [u8],
-    ) -> Result<usize, Error>;
-    fn init(&mut self, iv: &[u8]) -> Result<(), Error>;
+
+    fn init(&mut self, ssrc: u32, ext_seq_num: ExtendedSequenceNumber) -> Result<(), Error>;
+
+    // buffer[0..(range.end-range.start)] ^= keystream[range]
     fn xor_key(&mut self, buffer: &mut [u8], range: Range<usize>) -> Result<(), Error>;
 
     fn clone_inner(&self) -> Box<dyn ExtensionCipher>;
@@ -228,17 +225,16 @@ pub trait Cipher {
     ) -> Result<usize, Error>;
     fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error>;
 
-    fn encrypt(
-        &self,
-        nonce: &[u8],
-        aad: &[u8],
-        buf: &mut [u8],
-        pt_size: usize,
-    ) -> Result<usize, Error>;
+    // XXX(RLB) I don't love this API, but given that we have the AAD and the plaintext/ciphertext
+    // resident in the same buffer, Rust's memory model doesn't like it when we take two views of
+    // the same buffer, even if they're disjoint.  So to be maximally safe, we eat the cost of a
+    // memcpy and a slightly clunky API.
+    fn set_aad(&mut self, aad: &[u8]) -> Result<(), Error>;
+
+    fn encrypt(&self, nonce: &[u8], buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
     fn decrypt(
         &self,
         nonce: &[u8],
-        aad: &[u8],
         buf: &mut [u8],
         ct_size: usize, // TODO(RLB) Delete ct_size
     ) -> Result<usize, Error>;

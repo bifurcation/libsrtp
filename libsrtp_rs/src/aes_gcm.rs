@@ -11,6 +11,8 @@ struct Context<C> {
     key_size: AesKeySize,
     cipher: C,
     salt: [u8; 12],
+    aad: [u8; 512],
+    aad_size: usize,
 }
 
 impl<C> Context<C>
@@ -19,6 +21,7 @@ where
 {
     const SALT_SIZE: usize = 12;
     const TAG_SIZE: usize = 16;
+    const MAX_AAD_SIZE: usize = 512;
 
     fn new(key_size: AesKeySize, key: &[u8], salt: &[u8]) -> Result<Self, Error> {
         if key.len() != key_size.into() || salt.len() != Self::SALT_SIZE {
@@ -29,6 +32,8 @@ where
             key_size: key_size,
             cipher: C::new(Key::from_slice(key)),
             salt: [0; 12],
+            aad: [0; 512],
+            aad_size: 0,
         };
 
         ctx.salt.copy_from_slice(salt);
@@ -94,19 +99,24 @@ where
         self.rtp_nonce(ssrc, index.into(), nonce)
     }
 
-    fn encrypt(
-        &self,
-        nonce: &[u8],
-        aad: &[u8],
-        buf: &mut [u8],
-        pt_size: usize,
-    ) -> Result<usize, Error> {
+    fn set_aad(&mut self, aad: &[u8]) -> Result<(), Error> {
+        if aad.len() > Self::MAX_AAD_SIZE {
+            return Err(Error::CipherFail);
+        }
+
+        self.aad_size = aad.len();
+        self.aad[..self.aad_size].copy_from_slice(aad);
+        Ok(())
+    }
+
+    fn encrypt(&self, nonce: &[u8], buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         let ct_size = pt_size + Self::TAG_SIZE;
         if buf.len() < ct_size {
             return Err(Error::BadParam);
         }
 
         let nonce = Nonce::from_slice(&nonce);
+        let aad = &self.aad[..self.aad_size];
         let tag = self
             .cipher
             .encrypt_in_place_detached(nonce, aad, &mut buf[..pt_size])
@@ -116,13 +126,7 @@ where
         Ok(ct_size)
     }
 
-    fn decrypt(
-        &self,
-        nonce: &[u8],
-        aad: &[u8],
-        buf: &mut [u8],
-        ct_size: usize,
-    ) -> Result<usize, Error> {
+    fn decrypt(&self, nonce: &[u8], buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
         if ct_size < Self::TAG_SIZE {
             return Err(Error::BadParam);
         }
@@ -133,6 +137,7 @@ where
         let tag = GenericArray::from_slice(&tag);
 
         let nonce = Nonce::from_slice(&nonce);
+        let aad = &self.aad[..self.aad_size];
         self.cipher
             .decrypt_in_place_detached(nonce, aad, &mut buf[..pt_size], tag)
             .map_err(|_| Error::AuthFail)?;
@@ -236,7 +241,7 @@ mod tests {
         ];
 
         let cipher_type = NativeAesGcm::new(AesKeySize::Aes128)?;
-        let cipher = cipher_type.create(&key, &salt)?;
+        let mut cipher = cipher_type.create(&key, &salt)?;
 
         // Verify correct nonce formation
         let mut nonce: [u8; 12] = Default::default();
@@ -246,12 +251,14 @@ mod tests {
         // Verify correct encryption
         let mut enc_buffer = [0u8; 32];
         enc_buffer[..pt.len()].copy_from_slice(&pt);
-        let ct_size = cipher.encrypt(&nonce, &aad, &mut enc_buffer, pt.len())?;
+        cipher.set_aad(&aad)?;
+        let ct_size = cipher.encrypt(&nonce, &mut enc_buffer, pt.len())?;
         assert_eq!(ct_size, ct.len());
         assert_eq!(enc_buffer, ct);
 
         // Verify correct decryption
-        let pt_size = cipher.decrypt(&nonce, &aad, &mut enc_buffer, ct.len())?;
+        cipher.set_aad(&aad)?;
+        let pt_size = cipher.decrypt(&nonce, &mut enc_buffer, ct.len())?;
         assert_eq!(pt_size, pt.len());
         assert_eq!(&enc_buffer[..pt_size], &pt);
 
