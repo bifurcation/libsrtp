@@ -1,5 +1,8 @@
+use crate::policy::SecurityServices;
+use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::{Error, SessionKeys};
 use packed_struct::prelude::*;
+use std::convert::TryInto;
 use std::ops::Range;
 
 trait PackedSize {
@@ -199,6 +202,60 @@ impl PackedSize for TwoByteElementHeader {
     const PACKED_SIZE: usize = 2;
 }
 
+// https://datatracker.ietf.org/doc/html/rfc3711#section-3.4
+//
+//  0                   1                   2                   3
+//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |V=2|P|    RC   |  PT=SR or RR  |             length            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                         SSRC of sender                        |
+// +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+#[derive(PackedStruct)]
+#[packed_struct(bit_numbering = "msb0")]
+pub struct RtcpHeader {
+    #[packed_field(bits = "0..2")]
+    pub v: u8,
+
+    #[packed_field(bits = "2")]
+    pub p: u8,
+
+    #[packed_field(bits = "3..8")]
+    pub rc: u8,
+
+    #[packed_field]
+    pub pt: u8,
+
+    #[packed_field(endian = "msb")]
+    pub seq: u16,
+
+    #[packed_field(endian = "msb")]
+    pub ssrc: u32,
+}
+
+impl PackedSize for RtcpHeader {
+    const PACKED_SIZE: usize = 8;
+}
+
+// https://datatracker.ietf.org/doc/html/rfc3711#section-3.4
+//
+// +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+// |E|                         SRTCP index                         |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+#[derive(PackedStruct, Copy, Clone)]
+#[packed_struct(bit_numbering = "msb0")]
+pub struct SrtcpTrailer {
+    #[packed_field(bits = "0")]
+    e: bool,
+
+    #[packed_field(endian = "msb", bits = "1..32")]
+    index: u32,
+}
+
+impl PackedSize for SrtcpTrailer {
+    const PACKED_SIZE: usize = 4;
+}
+
 #[repr(usize)]
 #[derive(Copy, Clone)]
 pub enum ElementHeaderSize {
@@ -324,6 +381,11 @@ impl<'a> SrtpPacket<'a> {
             Some(hdr) => 4 * (hdr.length_u32 as usize),
             None => 0,
         };
+
+        let payload_start = ext_start + ext_size;
+        if payload_start > pkt_len {
+            return Err(Error::ParseError);
+        }
 
         Ok(SrtpPacket {
             data: data,
@@ -452,6 +514,185 @@ impl<'a> SrtpPacket<'a> {
 
         self.packet_end -= size;
         Ok(())
+    }
+
+    pub fn size(&self) -> usize {
+        self.packet_end
+    }
+}
+
+// XXX(RLB) There's some duplicate logic here with SrtpPacket, e.g., around finding MKI/tag and
+// appending/stripping.  It wasn't immediately clear to me how to improve this situation given that
+// Rust lacks the sort of structure composition that C++ has.
+pub struct SrtcpPacket<'a> {
+    data: &'a mut [u8],
+    aad: [u8; 12],
+
+    // Unpacked, read-only state
+    pub header: RtcpHeader,
+    trailer: Option<SrtcpTrailer>,
+
+    // Offsets
+    payload_start: usize,
+    payload_end: usize,
+    packet_end: usize,
+}
+
+impl<'a> SrtcpPacket<'a> {
+    pub fn new(
+        data: &'a mut [u8],
+        pkt_len: usize,
+        services: SecurityServices,
+        index: ExtendedSequenceNumber,
+    ) -> Result<Self, Error> {
+        let mut r = OffsetReader::new(&mut data[..pkt_len]);
+
+        let header = r.unpack::<RtcpHeader>()?;
+        let trailer = Some(SrtcpTrailer {
+            e: services.confidentiality(),
+            index: index.try_into().map_err(|_| Error::BadParam)?,
+        });
+
+        let payload_start = r.close();
+        Ok(SrtcpPacket {
+            data: data,
+            aad: Default::default(),
+
+            header: header,
+            trailer: trailer,
+
+            payload_start: payload_start,
+            payload_end: pkt_len,
+            packet_end: pkt_len,
+        })
+    }
+
+    pub fn find_mki<'b>(
+        &mut self,
+        session_keys: &'b mut Vec<SessionKeys>,
+    ) -> Option<&'b mut SessionKeys> {
+        for sk in session_keys {
+            let trailer_size = SrtcpTrailer::PACKED_SIZE;
+            let mki_size = sk.mki_id.len();
+            let tag_size = sk.rtp_auth.tag_size();
+
+            if self.payload_size() < mki_size + tag_size {
+                continue;
+            }
+
+            let mki_start = self.payload_end - (mki_size + tag_size);
+            let mki_end = mki_start + mki_size;
+            let possible_mki = &self.data[mki_start..mki_end];
+            if possible_mki != &sk.mki_id {
+                continue;
+            }
+
+            // This is our MKI.  End of the packet is trailer || mki || tag
+            let trailer_start = mki_start - trailer_size;
+            let trailer = OffsetReader::new(&mut self.data[trailer_start..mki_start])
+                .unpack::<SrtcpTrailer>()
+                .ok();
+            if trailer.is_none() {
+                continue;
+            }
+
+            self.payload_end = trailer_start;
+            self.trailer = trailer;
+            return Some(sk);
+        }
+        None
+    }
+
+    pub fn aad<'b>(&'b mut self) -> Result<&'b [u8], Error> {
+        let trailer = self.trailer.as_ref().ok_or(Error::BadParam)?;
+        if !trailer.e {
+            return Ok(&self.data[..self.payload_end]);
+        }
+
+        self.aad.fill(0);
+        self.aad[..8].copy_from_slice(&self.data[..8]);
+        trailer
+            .pack_to_slice(&mut self.aad[8..])
+            .map_err(|_| Error::BadParam)?;
+        Ok(&self.aad)
+    }
+
+    pub fn auth_data<'b>(&'b self) -> &'b [u8] {
+        &self.data[..self.payload_end]
+    }
+
+    pub fn payload_for_encrypt<'b>(&'b mut self) -> &'b mut [u8] {
+        &mut self.data[self.payload_start..]
+    }
+
+    pub fn payload_for_decrypt<'b>(&'b mut self) -> &'b mut [u8] {
+        &mut self.data[self.payload_start..self.payload_end]
+    }
+
+    pub fn payload_size(&self) -> usize {
+        self.payload_end - self.payload_start
+    }
+
+    pub fn set_payload_size(&mut self, size: usize) -> Result<(), Error> {
+        // This method should only be called when the end of the payload is the end of the packet
+        if self.payload_end != self.packet_end {
+            return Err(Error::BadParam);
+        }
+
+        let new_payload_end = self.payload_start + size;
+        if new_payload_end > self.data.len() {
+            return Err(Error::BadParam);
+        }
+
+        self.payload_end = new_payload_end;
+        self.packet_end = new_payload_end;
+        Ok(())
+    }
+
+    pub fn append<'b>(&'b mut self, size: usize) -> Result<&'b mut [u8], Error> {
+        let old_packet_end = self.packet_end;
+        let new_packet_end = self.packet_end + size;
+        if new_packet_end > self.data.len() {
+            return Err(Error::BadParam);
+        }
+
+        self.packet_end = new_packet_end;
+        Ok(&mut self.data[old_packet_end..new_packet_end])
+    }
+
+    pub fn append_trailer(&mut self) -> Result<(), Error> {
+        let trailer = self.trailer.ok_or(Error::BadParam)?;
+        let buffer = self.append(SrtcpTrailer::PACKED_SIZE)?;
+        trailer.pack_to_slice(buffer).map_err(|_| Error::Fail)?;
+        Ok(())
+    }
+
+    pub fn last<'b>(&'b self, size: usize) -> Result<&'b [u8], Error> {
+        if size > self.packet_end {
+            return Err(Error::BadParam);
+        }
+
+        let start = self.packet_end - size;
+        if start < self.payload_end {
+            // Don't allow reading from within the payload
+            return Err(Error::BadParam);
+        }
+
+        Ok(&self.data[start..self.packet_end])
+    }
+
+    pub fn strip(&mut self, size: usize) -> Result<(), Error> {
+        // Only allow stripping of post-payload data
+        if size > self.packet_end - self.payload_end {
+            return Err(Error::BadParam);
+        }
+
+        self.packet_end -= size;
+        Ok(())
+    }
+
+    pub fn strip_trailer(&mut self) -> Result<(), Error> {
+        self.strip(SrtcpTrailer::PACKED_SIZE)
     }
 
     pub fn size(&self) -> usize {

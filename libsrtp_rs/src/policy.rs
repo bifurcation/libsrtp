@@ -9,6 +9,22 @@ pub enum SecurityServices {
     ConfAndAuth = 3,
 }
 
+impl SecurityServices {
+    pub fn confidentiality(&self) -> bool {
+        match self {
+            SecurityServices::None | SecurityServices::Auth => false,
+            SecurityServices::Conf | SecurityServices::ConfAndAuth => true,
+        }
+    }
+
+    pub fn authenticity(&self) -> bool {
+        match self {
+            SecurityServices::None | SecurityServices::Conf => false,
+            SecurityServices::Auth | SecurityServices::ConfAndAuth => true,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub enum ProfileID {
