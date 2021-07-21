@@ -525,46 +525,55 @@ impl<'a> SrtpPacket<'a> {
 // appending/stripping.  It wasn't immediately clear to me how to improve this situation given that
 // Rust lacks the sort of structure composition that C++ has.
 pub struct SrtcpPacket<'a> {
-    data: &'a mut [u8],
-    aad: [u8; 12],
+    pub data: &'a mut [u8],
 
-    // Unpacked, read-only state
+    // Read-only state
     pub header: RtcpHeader,
     trailer: Option<SrtcpTrailer>,
+    trailer_data: [u8; 4],
 
     // Offsets
     payload_start: usize,
     payload_end: usize,
+    trailer_end: usize,
     packet_end: usize,
 }
 
 impl<'a> SrtcpPacket<'a> {
-    pub fn new(
-        data: &'a mut [u8],
-        pkt_len: usize,
-        services: SecurityServices,
-        index: ExtendedSequenceNumber,
-    ) -> Result<Self, Error> {
+    pub fn new(data: &'a mut [u8], pkt_len: usize) -> Result<Self, Error> {
         let mut r = OffsetReader::new(&mut data[..pkt_len]);
 
         let header = r.unpack::<RtcpHeader>()?;
-        let trailer = Some(SrtcpTrailer {
-            e: services.confidentiality(),
-            index: index.try_into().map_err(|_| Error::BadParam)?,
-        });
-
         let payload_start = r.close();
+
         Ok(SrtcpPacket {
             data: data,
-            aad: Default::default(),
 
             header: header,
-            trailer: trailer,
+            trailer: None,
+            trailer_data: Default::default(),
 
             payload_start: payload_start,
             payload_end: pkt_len,
+            trailer_end: pkt_len,
             packet_end: pkt_len,
         })
+    }
+
+    pub fn set_e_index(
+        &mut self,
+        services: SecurityServices,
+        index: ExtendedSequenceNumber,
+    ) -> Result<(), Error> {
+        let trailer = SrtcpTrailer {
+            e: services.confidentiality(),
+            index: index.try_into().map_err(|_| Error::BadParam)?,
+        };
+        let trailer_data = trailer.pack().map_err(|_| Error::Fail)?;
+
+        self.trailer = Some(trailer);
+        self.trailer_data = trailer_data;
+        Ok(())
     }
 
     pub fn find_mki<'b>(
@@ -589,36 +598,38 @@ impl<'a> SrtcpPacket<'a> {
 
             // This is our MKI.  End of the packet is trailer || mki || tag
             let trailer_start = mki_start - trailer_size;
-            let trailer = OffsetReader::new(&mut self.data[trailer_start..mki_start])
-                .unpack::<SrtcpTrailer>()
+            let mut trailer_data = [0u8; 4];
+            trailer_data.copy_from_slice(&mut self.data[trailer_start..mki_start]);
+
+            let trailer = SrtcpTrailer::unpack(&trailer_data)
+                .map_err(|_| Error::ParseError)
                 .ok();
             if trailer.is_none() {
                 continue;
             }
 
             self.payload_end = trailer_start;
+            self.trailer_end = mki_start;
             self.trailer = trailer;
+            self.trailer_data = trailer_data;
             return Some(sk);
         }
         None
     }
 
-    pub fn aad<'b>(&'b mut self) -> Result<&'b [u8], Error> {
+    pub fn aad<'b>(&'b mut self) -> Result<(&'b [u8], &'b [u8]), Error> {
         let trailer = self.trailer.as_ref().ok_or(Error::BadParam)?;
-        if !trailer.e {
-            return Ok(&self.data[..self.payload_end]);
-        }
+        let base_aad_end = if trailer.e {
+            RtcpHeader::PACKED_SIZE
+        } else {
+            self.payload_end
+        };
 
-        self.aad.fill(0);
-        self.aad[..8].copy_from_slice(&self.data[..8]);
-        trailer
-            .pack_to_slice(&mut self.aad[8..])
-            .map_err(|_| Error::BadParam)?;
-        Ok(&self.aad)
+        Ok((&self.data[..base_aad_end], &self.trailer_data))
     }
 
     pub fn auth_data<'b>(&'b self) -> &'b [u8] {
-        &self.data[..self.payload_end]
+        &self.data[..self.trailer_end]
     }
 
     pub fn payload_for_encrypt<'b>(&'b mut self) -> &'b mut [u8] {
@@ -645,6 +656,7 @@ impl<'a> SrtcpPacket<'a> {
         }
 
         self.payload_end = new_payload_end;
+        self.trailer_end = new_payload_end;
         self.packet_end = new_payload_end;
         Ok(())
     }
@@ -661,9 +673,16 @@ impl<'a> SrtcpPacket<'a> {
     }
 
     pub fn append_trailer(&mut self) -> Result<(), Error> {
-        let trailer = self.trailer.ok_or(Error::BadParam)?;
-        let buffer = self.append(SrtcpTrailer::PACKED_SIZE)?;
-        trailer.pack_to_slice(buffer).map_err(|_| Error::Fail)?;
+        // This method should only be called when the end of the trailer is the end of the packet
+        if self.trailer_end != self.packet_end {
+            return Err(Error::BadParam);
+        }
+
+        let trailer = self.trailer_data;
+        let trailer_size = SrtcpTrailer::PACKED_SIZE;
+        let buffer = self.append(trailer_size)?;
+        buffer.copy_from_slice(&trailer);
+        self.trailer_end = self.payload_end + trailer_size;
         Ok(())
     }
 
@@ -692,7 +711,9 @@ impl<'a> SrtcpPacket<'a> {
     }
 
     pub fn strip_trailer(&mut self) -> Result<(), Error> {
-        self.strip(SrtcpTrailer::PACKED_SIZE)
+        self.strip(SrtcpTrailer::PACKED_SIZE)?;
+        self.trailer_end -= SrtcpTrailer::PACKED_SIZE;
+        Ok(())
     }
 
     pub fn size(&self) -> usize {
@@ -897,21 +918,26 @@ mod test {
         Ok(())
     }
 
-    fn encrypt(buf: &mut [u8], pt_size: usize) -> usize {
-        xor_eq(&mut buf[..PAYLOAD_KEYSTREAM.len()], PAYLOAD_KEYSTREAM);
+    fn encrypt(buf: &mut [u8], keystream: &[u8], tag: &[u8], pt_size: usize) -> usize {
+        xor_eq(&mut buf[..keystream.len()], keystream);
 
-        let tag_end = pt_size + PAYLOAD_TAG.len();
-        buf[pt_size..tag_end].copy_from_slice(PAYLOAD_TAG);
+        let tag_end = pt_size + tag.len();
+        buf[pt_size..tag_end].copy_from_slice(tag);
         tag_end
     }
 
-    fn decrypt(buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
-        let pt_size = ct_size - PAYLOAD_TAG.len();
-        if &buf[pt_size..ct_size] != PAYLOAD_TAG {
+    fn decrypt(
+        buf: &mut [u8],
+        keystream: &[u8],
+        tag: &[u8],
+        ct_size: usize,
+    ) -> Result<usize, Error> {
+        let pt_size = ct_size - tag.len();
+        if &buf[pt_size..ct_size] != tag {
             return Err(Error::AuthFail);
         }
 
-        xor_eq(&mut buf[..pt_size], PAYLOAD_KEYSTREAM);
+        xor_eq(&mut buf[..pt_size], keystream);
         Ok(pt_size)
     }
 
@@ -933,7 +959,12 @@ mod test {
 
         // Emulate encrypting payload
         let pt_size = pkt.payload_size();
-        let ct_size = encrypt(pkt.payload_for_encrypt(), pt_size);
+        let ct_size = encrypt(
+            pkt.payload_for_encrypt(),
+            PAYLOAD_KEYSTREAM,
+            PAYLOAD_TAG,
+            pt_size,
+        );
         pkt.set_payload_size(ct_size)?;
 
         // Append MKI
@@ -989,7 +1020,12 @@ mod test {
 
         // Emulate decrypting payload
         let ct_size = pkt.payload_size();
-        let pt_size = decrypt(pkt.payload_for_decrypt(), ct_size)?;
+        let pt_size = decrypt(
+            pkt.payload_for_decrypt(),
+            PAYLOAD_KEYSTREAM,
+            PAYLOAD_TAG,
+            ct_size,
+        )?;
         pkt.set_payload_size(pt_size)?;
 
         // Emulate decrypting extension
@@ -1001,6 +1037,159 @@ mod test {
         // Verify that final packet content is correct
         let pkt_size = pkt.size();
         assert_eq!(&pkt_data[..pkt_size], PLAINTEXT_PACKET);
+
+        Ok(())
+    }
+
+    // SRTP Values (others borrowed from above)
+    const PLAINTEXT_PACKET_RTCP: &'static [u8] = &[
+        // Header
+        0x80, 0x0f, 0x12, 0x34, 0xde, 0xca, 0xfb, 0xad, // Payload...
+        0xde, 0xca, 0xfb, 0xad, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab,
+        0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab,
+        0xab, 0xab,
+    ];
+    const CIPHERTEXT_PACKET_RTCP: &'static [u8] = &[
+        // Header
+        0x80, 0x0f, 0x12, 0x34, 0xde, 0xca, 0xfb, 0xad, // Payload...
+        0xdd, 0xad, 0x22, 0x84, 0x13, 0xad, 0x5d, 0x8f, 0x1d, 0x1b, 0xc7, 0x16, 0x5b, 0xf5, 0x2f,
+        0x86, 0xfd, 0x82, 0xca, 0x68, 0x5b, 0xd4, 0x42, 0xcb, 0x10, 0x55, 0x47, 0x2d, 0xd0, 0x66,
+        0x41, 0xa1, // end of payload
+        0x80, 0x00, 0x00, 0x01, // trailer
+        0x6d, 0x6b, 0x69, // MKI = "mki"
+        0x74, 0x61, 0x67, // Tag = "tag"
+    ];
+    const PAYLOAD_KEYSTREAM_RTCP: &'static [u8] = &[
+        0x03, 0x67, 0xd9, 0x29, 0xb8, 0x06, 0xf6, 0x24, 0xb6, 0xb0, 0x6c, 0xbd, 0xf0, 0x5e, 0x84,
+        0x2d, 0x56, 0x29, 0x61, 0xc3, 0xf0, 0x7f, 0xe9, 0x60, 0xbb, 0xfe, 0xec, 0x86, 0x7b, 0xcd,
+        0xea, 0x0a,
+    ];
+    const PAYLOAD_TAG_RTCP: &'static [u8] = &[];
+    const AAD_RTCP_E: &'static [u8] = &[
+        0x80, 0x0f, 0x12, 0x34, 0xde, 0xca, 0xfb, 0xad, // Header
+        0x80, 0x00, 0x00, 0x01, // Trailer
+    ];
+    const AAD_RTCP_NOT_E: &'static [u8] = &[
+        0x80, 0x0f, 0x12, 0x34, 0xde, 0xca, 0xfb, 0xad, // Payload...
+        0xde, 0xca, 0xfb, 0xad, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab,
+        0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab,
+        0xab, 0xab, // end of payload
+        0x80, 0x00, 0x00, 0x01, // Trailer
+    ];
+    const AUTH_DATA_RTCP: &'static [u8] = &[
+        0x80, 0x0f, 0x12, 0x34, 0xde, 0xca, 0xfb, 0xad, // Payload...
+        0xdd, 0xad, 0x22, 0x84, 0x13, 0xad, 0x5d, 0x8f, 0x1d, 0x1b, 0xc7, 0x16, 0x5b, 0xf5, 0x2f,
+        0x86, 0xfd, 0x82, 0xca, 0x68, 0x5b, 0xd4, 0x42, 0xcb, 0x10, 0x55, 0x47, 0x2d, 0xd0, 0x66,
+        0x41, 0xa1, // end of payload
+        0x80, 0x00, 0x00, 0x01, // trailer
+    ];
+
+    #[test]
+    fn test_srtcp_protect_parsing() -> Result<(), Error> {
+        let pkt_size = PLAINTEXT_PACKET_RTCP.len();
+        let mut pkt_data = [0u8; 100];
+        pkt_data[..pkt_size].copy_from_slice(PLAINTEXT_PACKET_RTCP);
+        let mut pkt = SrtcpPacket::new(&mut pkt_data, pkt_size)?;
+        pkt.set_e_index(SecurityServices::ConfAndAuth, 1)?;
+
+        // Verify that AAD is as expected (with and without encryption)
+        let (base_aad, trailer_aad) = pkt.aad()?;
+        assert_eq!([base_aad, trailer_aad].concat(), AAD_RTCP_E);
+
+        pkt.trailer.as_mut().unwrap().e = false;
+        let (base_aad, trailer_aad) = pkt.aad()?;
+        assert_eq!([base_aad, trailer_aad].concat(), AAD_RTCP_NOT_E);
+        pkt.trailer.as_mut().unwrap().e = true;
+
+        // Emulate encrypting payload
+        let pt_size = pkt.payload_size();
+        println!("before: {:02x?} {}", pkt.data, pt_size);
+        let ct_size = encrypt(
+            pkt.payload_for_encrypt(),
+            PAYLOAD_KEYSTREAM_RTCP,
+            PAYLOAD_TAG_RTCP,
+            pt_size,
+        );
+        println!("after : {:02x?}", pkt.data);
+        pkt.set_payload_size(ct_size)?;
+
+        // Append trailer
+        pkt.append_trailer()?;
+
+        // Append MKI
+        pkt.append(MKI.len())?.copy_from_slice(MKI);
+
+        // Verify that auth input is as expected
+        assert_eq!(pkt.auth_data(), AUTH_DATA_RTCP);
+
+        // Append tag
+        pkt.append(TAG.len())?.copy_from_slice(TAG);
+
+        // Verify that final packet content is correct
+        let pkt_size = pkt.size();
+        assert_eq!(&pkt_data[..pkt_size], CIPHERTEXT_PACKET_RTCP);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_srtcp_unprotect_parsing() -> Result<(), Error> {
+        let mut sks = vec![SessionKeys {
+            rtp_cipher: NullCipher {}.create(&[], &[])?,
+            rtp_xtn_hdr_cipher: NullCipher {}.xtn_create(&[], &[])?,
+            rtp_auth: NativeHMAC {}.create(&[], TAG.len())?,
+            rtcp_cipher: NullCipher {}.create(&[], &[])?,
+            rtcp_auth: NullAuth {}.create(&[], 0)?,
+
+            mki_id: MKI.to_vec(),
+            limit: KeyLimitContext::new(),
+        }];
+
+        let pkt_size = CIPHERTEXT_PACKET_RTCP.len();
+        let mut pkt_data = [0u8; 100];
+        pkt_data[..pkt_size].copy_from_slice(CIPHERTEXT_PACKET_RTCP);
+        let mut pkt = SrtcpPacket::new(&mut pkt_data, pkt_size)?;
+
+        // Find MKI
+        pkt.find_mki(&mut sks).ok_or(Error::Fail)?;
+
+        // Verify that auth input is as expected
+        assert_eq!(pkt.auth_data(), AUTH_DATA_RTCP);
+
+        // Verify and strip tag
+        assert_eq!(pkt.last(TAG.len())?, TAG);
+        pkt.strip(TAG.len())?;
+
+        // Verify and strip MKI
+        assert_eq!(pkt.last(MKI.len())?, MKI);
+        pkt.strip(MKI.len())?;
+
+        // Strip the trailer
+        pkt.strip_trailer()?;
+
+        // Verify that AAD is as expected
+        let (base_aad, trailer_aad) = pkt.aad()?;
+        assert_eq!([base_aad, trailer_aad].concat(), AAD_RTCP_E);
+
+        // Emulate decrypting payload
+        let ct_size = pkt.payload_size();
+        let pt_size = decrypt(
+            pkt.payload_for_decrypt(),
+            PAYLOAD_KEYSTREAM_RTCP,
+            PAYLOAD_TAG_RTCP,
+            ct_size,
+        )?;
+        pkt.set_payload_size(pt_size)?;
+
+        // Check that AAD without encryption is as expected
+        pkt.trailer.as_mut().unwrap().e = false;
+        let (base_aad, trailer_aad) = pkt.aad()?;
+        assert_eq!([base_aad, trailer_aad].concat(), AAD_RTCP_NOT_E);
+        pkt.trailer.as_mut().unwrap().e = true;
+
+        // Verify that final packet content is correct
+        let pkt_size = pkt.size();
+        assert_eq!(&pkt_data[..pkt_size], PLAINTEXT_PACKET_RTCP);
 
         Ok(())
     }
