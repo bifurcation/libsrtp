@@ -1,11 +1,16 @@
 use crate::crypto_kernel::{
     Cipher, CipherType, CipherTypeID, ExtensionCipher, ExtensionCipherType, ExtensionCipherTypeID,
+    Reset,
 };
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 use std::ops::Range;
 
 struct Context;
+
+impl Reset for Context {
+    fn reset(&mut self) {}
+}
 
 impl ExtensionCipher for Context {
     fn xtn_id(&self) -> ExtensionCipherTypeID {
@@ -18,10 +23,6 @@ impl ExtensionCipher for Context {
 
     fn xor_key(&mut self, _buffer: &mut [u8], _range: Range<usize>) -> Result<(), Error> {
         Ok(())
-    }
-
-    fn clone_inner(&self) -> Box<dyn ExtensionCipher> {
-        Box::new(Context {})
     }
 }
 
@@ -52,10 +53,6 @@ impl Cipher for Context {
 
     fn decrypt(&self, _nonce: &[u8], _buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
         Ok(ct_size)
-    }
-
-    fn clone_inner(&self) -> Box<dyn Cipher> {
-        Box::new(Context {})
     }
 }
 

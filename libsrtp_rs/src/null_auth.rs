@@ -1,9 +1,12 @@
-use crate::crypto_kernel::{Auth, AuthType, AuthTypeID};
+use crate::crypto_kernel::{Auth, AuthType, AuthTypeID, Reset};
 use crate::srtp::Error;
-use std::any::Any;
 
 #[derive(Clone)]
 struct Context;
+
+impl Reset for Context {
+    fn reset(&mut self) {}
+}
 
 impl Auth for Context {
     fn tag_size(&self) -> usize {
@@ -28,18 +31,6 @@ impl Auth for Context {
         } else {
             Ok(())
         }
-    }
-
-    fn clone_inner(&self) -> Box<dyn Auth> {
-        Box::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn equals(&self, other: &Box<dyn Auth>) -> bool {
-        other.as_any().is::<Context>()
     }
 }
 

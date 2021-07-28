@@ -1,5 +1,5 @@
 use crate::crypto_kernel::constants;
-use crate::crypto_kernel::{Cipher, CipherTypeID, CryptoKernel};
+use crate::crypto_kernel::{CipherInstance, CipherTypeID, CryptoKernel};
 use crate::srtp::Error;
 use num_enum::IntoPrimitive;
 
@@ -18,7 +18,7 @@ pub enum KdfLabel {
 
 pub struct KDF {
     salt: [u8; 16],
-    cipher: Box<dyn Cipher>,
+    cipher: CipherInstance,
 }
 
 impl KDF {
@@ -52,11 +52,15 @@ impl KDF {
     }
 
     pub fn generate(&self, label: KdfLabel, buffer: &mut [u8]) -> Result<(), Error> {
+        let mut inst = self.cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let op = inst.start();
+
         let mut nonce = self.salt;
         let label_u8: u8 = label.into();
         nonce[7] ^= label_u8;
 
-        self.cipher.encrypt(&nonce, buffer, buffer.len())?;
+        buffer.fill(0);
+        op.encrypt(&nonce, buffer, buffer.len())?;
         Ok(())
     }
 }

@@ -5,6 +5,7 @@ use crate::policy::*;
 use crate::replay::*;
 use crate::rtp_header::SrtpPacket;
 use constant_time_eq::constant_time_eq;
+use std::rc::Rc;
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +71,7 @@ impl<'a> CipherFactory<'a> {
         key_label: KdfLabel,
         salt_label: KdfLabel,
         salt_size: usize,
-    ) -> Result<Box<dyn ExtensionCipher>, Error> {
+    ) -> Result<ExtensionCipherInstance, Error> {
         let mut key_buffer = [0u8; 32];
         let key = &mut key_buffer[..xtn_cipher_type.key_size()];
         self.kdf.generate(key_label, key)?;
@@ -91,7 +92,7 @@ impl<'a> CipherFactory<'a> {
         key_label: KdfLabel,
         salt_label: KdfLabel,
         salt_size: usize,
-    ) -> Result<Box<dyn Cipher>, Error> {
+    ) -> Result<CipherInstance, Error> {
         let mut key_buffer = [0u8; 32];
         let key = &mut key_buffer[..cipher_type.key_size()];
         self.kdf.generate(key_label, key)?;
@@ -111,7 +112,7 @@ impl<'a> CipherFactory<'a> {
         auth_type: AuthTypeID,
         key_label: KdfLabel,
         tag_size: usize,
-    ) -> Result<Box<dyn Auth>, Error> {
+    ) -> Result<AuthInstance, Error> {
         let mut key_buffer = [0u8; 20];
         let key = &mut key_buffer[..auth_type.key_size()];
         self.kdf.generate(key_label, key)?;
@@ -122,11 +123,11 @@ impl<'a> CipherFactory<'a> {
 
 #[derive(Clone)]
 pub struct SessionKeys {
-    pub rtp_cipher: Box<dyn Cipher>,
-    pub rtp_xtn_hdr_cipher: Box<dyn ExtensionCipher>,
-    pub rtp_auth: Box<dyn Auth>,
-    pub rtcp_cipher: Box<dyn Cipher>,
-    pub rtcp_auth: Box<dyn Auth>,
+    pub rtp_cipher: CipherInstance,
+    pub rtp_xtn_hdr_cipher: ExtensionCipherInstance,
+    pub rtp_auth: AuthInstance,
+    pub rtcp_cipher: CipherInstance,
+    pub rtcp_auth: AuthInstance,
 
     pub mki_id: Vec<u8>,
     pub limit: KeyLimitContext,
@@ -188,6 +189,87 @@ impl SessionKeys {
             mki_id: key.id.clone(),
             limit: KeyLimitContext::new(),
         })
+    }
+
+    fn srtp_add_auth(&mut self, pkt: &mut SrtpPacket) -> Result<(), Error> {
+        let mut inst = self.rtp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut tag = [0u8; 128];
+        let tag_size = op.tag_size();
+        op.compute(pkt.auth_data(), &mut tag)?;
+        pkt.append(tag_size)?.copy_from_slice(&tag[..tag_size]);
+        Ok(())
+    }
+
+    fn srtp_verify_auth(&mut self, pkt: &SrtpPacket) -> Result<usize, Error> {
+        let mut inst = self.rtp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut tag_buf = [0u8; 128];
+        let tag_size = op.tag_size();
+        let tag = &mut tag_buf[..tag_size];
+        op.compute(pkt.auth_data(), tag)?;
+        if !constant_time_eq(tag, pkt.last(tag_size)?) {
+            return Err(Error::AuthFail);
+        }
+        Ok(tag_size)
+    }
+
+    fn process_header_extension(
+        &mut self,
+        pkt: &mut SrtpPacket,
+        index: ExtendedSequenceNumber,
+    ) -> Result<(), Error> {
+        let mut inst = self
+            .rtp_xtn_hdr_cipher
+            .try_borrow_mut()
+            .map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+        op.init(pkt.header.ssrc, index)?;
+        pkt.extensions()?
+            .apply(|ext| op.xor_key(ext.data, ext.range))?;
+        Ok(())
+    }
+
+    fn srtp_encrypt(
+        &mut self,
+        pkt: &mut SrtpPacket,
+        index: ExtendedSequenceNumber,
+    ) -> Result<(), Error> {
+        let mut inst = self.rtp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut nonce = [0u8; 16];
+        let nonce_size = op.id().nonce_size();
+        let nonce = &mut nonce[..nonce_size];
+        op.rtp_nonce(pkt.header.ssrc, index, nonce)?;
+
+        op.set_aad(pkt.aad())?;
+        let pt_size = pkt.payload_size();
+        let ct_size = op.encrypt(nonce, pkt.payload_for_encrypt(), pt_size)?;
+        pkt.set_payload_size(ct_size)?;
+        Ok(())
+    }
+
+    fn srtp_decrypt(
+        &mut self,
+        pkt: &mut SrtpPacket,
+        index: ExtendedSequenceNumber,
+    ) -> Result<(), Error> {
+        let mut inst = self.rtp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut nonce = [0u8; 16];
+        let nonce_size = op.id().nonce_size();
+        let nonce = &mut nonce[..nonce_size];
+        op.rtp_nonce(pkt.header.ssrc, index, nonce)?;
+
+        op.set_aad(pkt.aad())?;
+        let ct_size = pkt.payload_size();
+        let pt_size = op.decrypt(nonce, pkt.payload_for_encrypt(), ct_size)?;
+        pkt.set_payload_size(pt_size)?;
+        Ok(())
     }
 }
 
@@ -283,9 +365,10 @@ impl Stream {
     }
 
     pub fn same_crypto(&self, other: &Self) -> bool {
-        self.session_keys[0]
-            .rtp_auth
-            .equals(&other.session_keys[0].rtp_auth)
+        Rc::ptr_eq(
+            &self.session_keys[0].rtp_auth,
+            &other.session_keys[0].rtp_auth,
+        )
     }
 
     pub fn clone_for_ssrc(&self, ssrc: u32) -> Result<Self, Error> {
@@ -380,31 +463,16 @@ impl Stream {
         }
 
         // Encrypt the headers
-        sk.rtp_xtn_hdr_cipher.init(pkt.header.ssrc, index)?;
-        pkt.extensions()?
-            .apply(|ext| sk.rtp_xtn_hdr_cipher.xor_key(ext.data, ext.range))?;
+        sk.process_header_extension(pkt, index)?;
 
         // Encrypt the payload
-        let mut nonce = [0u8; 16];
-        let nonce_size = sk.rtp_cipher.id().nonce_size();
-        let nonce = &mut nonce[..nonce_size];
-        sk.rtp_cipher.rtp_nonce(pkt.header.ssrc, index, nonce)?;
-
-        sk.rtp_cipher.set_aad(pkt.aad())?;
-        let pt_size = pkt.payload_size();
-        let ct_size = sk
-            .rtp_cipher
-            .encrypt(nonce, pkt.payload_for_encrypt(), pt_size)?;
-        pkt.set_payload_size(ct_size)?;
+        sk.srtp_encrypt(pkt, index)?;
 
         // Write the MKI
         pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
 
         // Write the tag
-        let mut tag = [0u8; 128]; // TODO fix some max size
-        let tag_size = sk.rtp_auth.tag_size();
-        sk.rtp_auth.compute(pkt.auth_data(), &mut tag)?;
-        pkt.append(tag_size)?.copy_from_slice(&tag[..tag_size]);
+        sk.srtp_add_auth(pkt)?;
 
         Ok(pkt.size())
     }
@@ -423,13 +491,7 @@ impl Stream {
         };
 
         // Verify the authentication tag
-        let mut tag_buf = [0u8; 128]; // TODO fix some max size
-        let tag_size = sk.rtp_auth.tag_size();
-        let tag = &mut tag_buf[..tag_size];
-        sk.rtp_auth.compute(pkt.auth_data(), tag)?;
-        if !constant_time_eq(tag, pkt.last(tag_size)?) {
-            return Err(Error::AuthFail);
-        }
+        let tag_size = sk.srtp_verify_auth(pkt)?;
 
         // Strip the auth tag and MKI
         pkt.strip(tag_size)?;
@@ -438,22 +500,10 @@ impl Stream {
         }
 
         // Decrypt the headers
-        sk.rtp_xtn_hdr_cipher.init(pkt.header.ssrc, index)?;
-        pkt.extensions()?
-            .apply(|ext| sk.rtp_xtn_hdr_cipher.xor_key(ext.data, ext.range))?;
+        sk.process_header_extension(pkt, index)?;
 
         // Decrypt the payload
-        let mut nonce = [0u8; 16];
-        let nonce_size = sk.rtp_cipher.id().nonce_size();
-        let nonce = &mut nonce[..nonce_size];
-        sk.rtp_cipher.rtp_nonce(pkt.header.ssrc, index, nonce)?;
-
-        sk.rtp_cipher.set_aad(pkt.aad())?;
-        let ct_size = pkt.payload_size();
-        let pt_size = sk
-            .rtp_cipher
-            .encrypt(nonce, pkt.payload_for_decrypt(), ct_size)?;
-        pkt.set_payload_size(pt_size)?;
+        sk.srtp_decrypt(pkt, index)?;
 
         Ok(pkt.size())
     }

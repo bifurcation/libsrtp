@@ -1,8 +1,7 @@
-use crate::crypto_kernel::{Auth, AuthType, AuthTypeID};
+use crate::crypto_kernel::{Auth, AuthType, AuthTypeID, Reset};
 use crate::srtp::Error;
 use hmac::{Hmac, Mac, NewMac};
 use sha1::Sha1;
-use std::any::Any;
 
 type HmacSha1 = Hmac<Sha1>;
 
@@ -18,6 +17,12 @@ impl HMAC {
             tag_size: tag_size,
             mac: HmacSha1::new_from_slice(key).map_err(|_| Error::BadParam)?,
         })
+    }
+}
+
+impl Reset for HMAC {
+    fn reset(&mut self) {
+        self.mac.reset();
     }
 }
 
@@ -50,21 +55,6 @@ impl Auth for HMAC {
 
         tag[..self.tag_size].copy_from_slice(&digest[..self.tag_size]);
         Ok(())
-    }
-
-    fn clone_inner(&self) -> Box<dyn Auth> {
-        Box::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn equals(&self, other: &Box<dyn Auth>) -> bool {
-        match other.as_any().downcast_ref::<HMAC>() {
-            Some(_) => true,
-            None => false,
-        }
     }
 }
 

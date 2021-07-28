@@ -1,5 +1,5 @@
 use crate::crypto_kernel::constants::AesKeySize;
-use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
+use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID, Reset};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 use crate::util::xor_eq;
@@ -13,6 +13,13 @@ struct Context<C> {
     salt: [u8; 12],
     aad: [u8; 512],
     aad_size: usize,
+}
+
+impl<C> Reset for Context<C> {
+    fn reset(&mut self) {
+        self.aad.fill(0);
+        self.aad_size = 0;
+    }
 }
 
 impl<C> Context<C>
@@ -143,10 +150,6 @@ where
             .map_err(|_| Error::AuthFail)?;
         buf[pt_size..].fill(0);
         Ok(pt_size)
-    }
-
-    fn clone_inner(&self) -> Box<dyn Cipher> {
-        Box::new(self.clone())
     }
 }
 

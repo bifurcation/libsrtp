@@ -1,8 +1,10 @@
 use crate::crypto_test;
 use crate::srtp::Error;
-use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 
 use crate::aes_gcm::NativeAesGcm;
 use crate::aes_icm::NativeAesIcm;
@@ -91,6 +93,60 @@ pub mod constants {
 }
 
 //
+// Operations and Instances
+//
+
+// Crypto objects in libsrtp are stateful, so they need to be reset between operations.
+pub trait Reset {
+    fn reset(&mut self);
+}
+
+// Operation just represents a wrapper around a resettable crypto object that uses RAII to make
+// sure the object is reset at the end of the operation's scope.
+pub struct Operation<'a, T: Reset> {
+    val: &'a mut T,
+}
+
+impl<'a, T: Reset> Deref for Operation<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.val
+    }
+}
+
+impl<'a, T: Reset> DerefMut for Operation<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.val
+    }
+}
+
+impl<'a, T: Reset> Drop for Operation<'a, T> {
+    fn drop(&mut self) {
+        self.val.reset();
+    }
+}
+
+pub struct Instance<T: Reset> {
+    val: T,
+}
+
+// An Instance represents an instantiation of a crypto object with a given key, which will be
+// reused across multiple operations.  The Instance object is mainly used to produce Operations
+// that expose the underlying object.
+impl<T> Instance<T>
+where
+    T: Reset,
+{
+    pub fn new(val: T) -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(Self { val: val }))
+    }
+
+    pub fn start<'b>(&'b mut self) -> Operation<'b, T> {
+        Operation { val: &mut self.val }
+    }
+}
+
+//
 // ExtensionCipher
 //
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -130,22 +186,22 @@ impl ExtensionCipherTypeID {
     }
 }
 
-pub trait ExtensionCipher {
+pub trait ExtensionCipher: Reset {
     fn xtn_id(&self) -> ExtensionCipherTypeID;
 
     fn init(&mut self, ssrc: u32, ext_seq_num: ExtendedSequenceNumber) -> Result<(), Error>;
 
     // buffer[0..(range.end-range.start)] ^= keystream[range]
     fn xor_key(&mut self, buffer: &mut [u8], range: Range<usize>) -> Result<(), Error>;
-
-    fn clone_inner(&self) -> Box<dyn ExtensionCipher>;
 }
 
-impl Clone for Box<dyn ExtensionCipher> {
-    fn clone(&self) -> Box<dyn ExtensionCipher> {
-        self.clone_inner()
+impl Reset for Box<dyn ExtensionCipher> {
+    fn reset(&mut self) {
+        self.deref_mut().reset()
     }
 }
+
+pub type ExtensionCipherInstance = Rc<RefCell<Instance<Box<dyn ExtensionCipher>>>>;
 
 pub trait ExtensionCipherType {
     // XXX(RLB) These names are slightly awkward, but they avoid overlap  with the corresponding
@@ -214,7 +270,7 @@ impl CipherTypeID {
     }
 }
 
-pub trait Cipher {
+pub trait Cipher: Reset {
     fn id(&self) -> CipherTypeID;
 
     fn rtp_nonce(
@@ -238,25 +294,15 @@ pub trait Cipher {
         buf: &mut [u8],
         ct_size: usize, // TODO(RLB) Delete ct_size
     ) -> Result<usize, Error>;
-
-    // XXX(RLB): These methods are required to support cloning of SRTP streams.  Right now, Cipher
-    // objects are not suitable for shared usage (Rc / Arc) because (a) doing anything with them
-    // requires mutation and (b) the encryption process is multi-stage, and would lead to
-    // inconsistent states if interrupted mid-stream.
-    //
-    // What we should do instead is simplify this API so that mutability is no longer required, and
-    // then use Rc<dyn Cipher> instead of Box<dyn Cipher> in consumers. Roughly:
-    //
-    //   fn encrypt(&self, iv: &[u8], aad: &[u8], buf: &mut [u8], pt_size: usize)
-    //   fn decrypt(&self, iv: &[u8], aad: &[u8], buf: &mut [u8], ct_size: usize)
-    fn clone_inner(&self) -> Box<dyn Cipher>;
 }
 
-impl Clone for Box<dyn Cipher> {
-    fn clone(&self) -> Box<dyn Cipher> {
-        self.clone_inner()
+impl Reset for Box<dyn Cipher> {
+    fn reset(&mut self) {
+        self.deref_mut().reset()
     }
 }
+
+pub type CipherInstance = Rc<RefCell<Instance<Box<dyn Cipher>>>>;
 
 pub trait CipherType {
     fn id(&self) -> CipherTypeID;
@@ -282,28 +328,37 @@ impl AuthTypeID {
     }
 }
 
-pub trait Auth {
+pub trait Auth: Reset {
     fn tag_size(&self) -> usize;
     fn prefix_size(&self) -> usize;
     fn start(&mut self) -> Result<(), Error>;
     fn update(&mut self, update: &[u8]) -> Result<(), Error>;
     fn compute(&mut self, message: &[u8], tag: &mut [u8]) -> Result<(), Error>;
+}
 
-    // XXX(RLB): See the screed in Cipher above
-    fn clone_inner(&self) -> Box<dyn Auth>;
-    fn as_any(&self) -> &dyn Any;
-    fn equals(&self, other: &Box<dyn Auth>) -> bool;
+impl Reset for Box<dyn Auth> {
+    fn reset(&mut self) {
+        self.deref_mut().reset()
+    }
+}
+
+pub type AuthInstance = Rc<RefCell<Instance<Box<dyn Auth>>>>;
+
+pub trait TagSize {
+    fn tag_size(&self) -> Result<usize, Error>;
+}
+
+impl TagSize for AuthInstance {
+    fn tag_size(&self) -> Result<usize, Error> {
+        let mut inst = self.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let op = inst.start();
+        Ok(op.tag_size())
+    }
 }
 
 pub trait AuthType {
     fn id(&self) -> AuthTypeID;
     fn create(&self, key: &[u8], tag_size: usize) -> Result<Box<dyn Auth>, Error>;
-}
-
-impl Clone for Box<dyn Auth> {
-    fn clone(&self) -> Box<dyn Auth> {
-        self.clone_inner()
-    }
 }
 
 //
@@ -371,11 +426,10 @@ impl CryptoKernel {
         id: ExtensionCipherTypeID,
         key: &[u8],
         salt: &[u8],
-    ) -> Result<Box<dyn ExtensionCipher>, Error> {
-        match self.xtn_cipher_types.get(&id) {
-            Some(cipher_type) => cipher_type.xtn_create(key, salt),
-            _ => Err(Error::Fail),
-        }
+    ) -> Result<ExtensionCipherInstance, Error> {
+        let cipher_type = self.xtn_cipher_types.get(&id).ok_or(Error::Fail)?;
+        let cipher = cipher_type.xtn_create(key, salt)?;
+        Ok(Instance::new(cipher))
     }
 
     pub fn cipher(
@@ -383,23 +437,16 @@ impl CryptoKernel {
         id: CipherTypeID,
         key: &[u8],
         salt: &[u8],
-    ) -> Result<Box<dyn Cipher>, Error> {
-        match self.cipher_types.get(&id) {
-            Some(cipher_type) => cipher_type.create(key, salt),
-            _ => Err(Error::Fail),
-        }
+    ) -> Result<CipherInstance, Error> {
+        let cipher_type = self.cipher_types.get(&id).ok_or(Error::Fail)?;
+        let cipher = cipher_type.create(key, salt)?;
+        Ok(Instance::new(cipher))
     }
 
-    pub fn auth(
-        &self,
-        id: AuthTypeID,
-        key: &[u8],
-        tag_size: usize,
-    ) -> Result<Box<dyn Auth>, Error> {
-        match self.auth_types.get(&id) {
-            Some(auth_type) => auth_type.create(key, tag_size),
-            _ => Err(Error::Fail),
-        }
+    pub fn auth(&self, id: AuthTypeID, key: &[u8], tag_size: usize) -> Result<AuthInstance, Error> {
+        let auth_type = self.auth_types.get(&id).ok_or(Error::Fail)?;
+        let auth = auth_type.create(key, tag_size)?;
+        Ok(Instance::new(auth))
     }
 }
 

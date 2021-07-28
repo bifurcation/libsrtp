@@ -1,6 +1,7 @@
 use crate::crypto_kernel::constants::AesKeySize;
 use crate::crypto_kernel::{
     Cipher, CipherType, CipherTypeID, ExtensionCipher, ExtensionCipherType, ExtensionCipherTypeID,
+    Reset,
 };
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
@@ -23,6 +24,15 @@ where
     key: [u8; 32],
     salt: [u8; 14],
     cipher: Option<Ctr128BE<C>>,
+}
+
+impl<C> Reset for Context<C>
+where
+    C: Clone + BlockEncrypt + BlockCipher<BlockSize = U16> + NewBlockCipher + 'static,
+{
+    fn reset(&mut self) {
+        self.cipher = None
+    }
 }
 
 impl<C> Context<C>
@@ -126,10 +136,6 @@ where
             .map_err(|_| Error::CipherFail)?;
         Ok(())
     }
-
-    fn clone_inner(&self) -> Box<dyn ExtensionCipher> {
-        Box::new(self.clone())
-    }
 }
 
 impl<C> Cipher for Context<C>
@@ -169,10 +175,6 @@ where
 
     fn decrypt(&self, nonce: &[u8], buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
         self.encrypt(nonce, buf, ct_size)
-    }
-
-    fn clone_inner(&self) -> Box<dyn Cipher> {
-        Box::new(self.clone())
     }
 }
 

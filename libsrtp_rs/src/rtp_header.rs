@@ -1,3 +1,4 @@
+use crate::crypto_kernel::TagSize;
 use crate::policy::SecurityServices;
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::{Error, SessionKeys};
@@ -406,7 +407,10 @@ impl<'a> SrtpPacket<'a> {
     ) -> Option<&'b mut SessionKeys> {
         for sk in session_keys {
             let mki_size = sk.mki_id.len();
-            let tag_size = sk.rtp_auth.tag_size();
+            let tag_size = match sk.rtp_auth.tag_size() {
+                Ok(x) => x,
+                Err(_) => return None,
+            };
 
             if self.payload_size() < mki_size + tag_size {
                 continue;
@@ -583,7 +587,10 @@ impl<'a> SrtcpPacket<'a> {
         for sk in session_keys {
             let trailer_size = SrtcpTrailer::PACKED_SIZE;
             let mki_size = sk.mki_id.len();
-            let tag_size = sk.rtp_auth.tag_size();
+            let tag_size = match sk.rtp_auth.tag_size() {
+                Ok(x) => x,
+                Err(_) => return None,
+            };
 
             if self.payload_size() < mki_size + tag_size {
                 continue;
