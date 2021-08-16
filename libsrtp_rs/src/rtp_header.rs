@@ -731,11 +731,8 @@ impl<'a> SrtcpPacket<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::crypto_kernel::{AuthType, CipherType, ExtensionCipherType};
-    use crate::hmac::NativeHMAC;
+    use crate::crypto_kernel::{AuthTypeID, CipherTypeID, CryptoKernel, ExtensionCipherTypeID};
     use crate::key_limit::KeyLimitContext;
-    use crate::null_auth::NullAuth;
-    use crate::null_cipher::NullCipher;
     use crate::util::xor_eq;
 
     // SRTP extension parsing
@@ -992,12 +989,17 @@ mod test {
 
     #[test]
     fn test_srtp_unprotect_parsing() -> Result<(), Error> {
+        let kernel = CryptoKernel::default()?;
+        let null_cipher = kernel.cipher(CipherTypeID::Null, &[], &[])?;
+        let null_xtn_cipher = kernel.xtn_cipher(ExtensionCipherTypeID::Null, &[], &[])?;
+        let hmac_auth = kernel.auth(AuthTypeID::HmacSha1, &[], TAG.len())?;
+
         let mut sks = vec![SessionKeys {
-            rtp_cipher: NullCipher {}.create(&[], &[])?,
-            rtp_xtn_hdr_cipher: NullCipher {}.xtn_create(&[], &[])?,
-            rtp_auth: NativeHMAC {}.create(&[], TAG.len())?,
-            rtcp_cipher: NullCipher {}.create(&[], &[])?,
-            rtcp_auth: NullAuth {}.create(&[], 0)?,
+            rtp_cipher: null_cipher.clone(),
+            rtp_xtn_hdr_cipher: null_xtn_cipher,
+            rtp_auth: hmac_auth.clone(),
+            rtcp_cipher: null_cipher.clone(),
+            rtcp_auth: hmac_auth.clone(),
 
             mki_id: MKI.to_vec(),
             limit: KeyLimitContext::new(),
@@ -1141,12 +1143,17 @@ mod test {
 
     #[test]
     fn test_srtcp_unprotect_parsing() -> Result<(), Error> {
+        let kernel = CryptoKernel::default()?;
+        let null_cipher = kernel.cipher(CipherTypeID::Null, &[], &[])?;
+        let null_xtn_cipher = kernel.xtn_cipher(ExtensionCipherTypeID::Null, &[], &[])?;
+        let hmac_auth = kernel.auth(AuthTypeID::HmacSha1, &[], TAG.len())?;
+
         let mut sks = vec![SessionKeys {
-            rtp_cipher: NullCipher {}.create(&[], &[])?,
-            rtp_xtn_hdr_cipher: NullCipher {}.xtn_create(&[], &[])?,
-            rtp_auth: NativeHMAC {}.create(&[], TAG.len())?,
-            rtcp_cipher: NullCipher {}.create(&[], &[])?,
-            rtcp_auth: NullAuth {}.create(&[], 0)?,
+            rtp_cipher: null_cipher.clone(),
+            rtp_xtn_hdr_cipher: null_xtn_cipher,
+            rtp_auth: hmac_auth.clone(),
+            rtcp_cipher: null_cipher.clone(),
+            rtcp_auth: hmac_auth.clone(),
 
             mki_id: MKI.to_vec(),
             limit: KeyLimitContext::new(),

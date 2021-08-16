@@ -135,7 +135,7 @@ pub struct SessionKeys {
 }
 
 impl SessionKeys {
-    fn new(
+    pub fn new(
         kernel: &CryptoKernel,
         key: &MasterKey,
         rtp: &CryptoPolicy,
