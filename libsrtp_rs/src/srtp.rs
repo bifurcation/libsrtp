@@ -5,7 +5,8 @@ use crate::policy::*;
 use crate::replay::*;
 use crate::rtp_header::SrtpPacket;
 use constant_time_eq::constant_time_eq;
-use std::rc::Rc;
+use std::any::Any;
+use std::rc::{Rc, Weak};
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,6 +388,20 @@ impl Stream {
         Ok(stream)
     }
 
+    pub fn check_ssrc_collision(&mut self, handler: EventHandler, direction: Direction) {
+        if self.direction == Direction::Unknown {
+            self.direction = direction;
+            return;
+        }
+
+        if self.direction == direction {
+            return; // OK
+        }
+
+        // Report collision
+        handler.handle(self.ssrc, Event::SsrcCollision);
+    }
+
     pub fn get_session_keys(
         &mut self,
         use_mki: bool,
@@ -424,11 +439,12 @@ impl Stream {
         Ok((estimate, delta, false))
     }
 
-    pub fn encrypt(
+    pub fn srtp_encrypt(
         &mut self,
         pkt: &mut SrtpPacket,
         use_mki: bool,
         mki_index: usize,
+        event_handler: EventHandler,
     ) -> Result<usize, Error> {
         // Estimate the packet index
         let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
@@ -447,6 +463,7 @@ impl Stream {
         }
 
         // Look up the session keys by MKI
+        let ssrc = self.ssrc;
         let sk = match self.get_session_keys(use_mki, mki_index) {
             Some(x) => x,
             None => return Err(Error::BadMki),
@@ -455,9 +472,9 @@ impl Stream {
         // Update the key usage limit
         match sk.limit.update() {
             KeyEvent::Normal => {}
-            KeyEvent::SoftLimit => { /* TODO report soft limit */ }
+            KeyEvent::SoftLimit => event_handler.handle(ssrc, Event::KeySoftLimit),
             KeyEvent::HardLimit => {
-                // TODO report hard limit
+                event_handler.handle(ssrc, Event::KeyHardLimit);
                 return Err(Error::KeyExpired);
             }
         }
@@ -477,7 +494,7 @@ impl Stream {
         Ok(pkt.size())
     }
 
-    pub fn decrypt(
+    pub fn srtp_decrypt(
         &mut self,
         pkt: &mut SrtpPacket,
         index: ExtendedSequenceNumber,
@@ -509,18 +526,71 @@ impl Stream {
     }
 }
 
+pub type UserData = Option<Weak<dyn Any>>;
+
+#[derive(Debug, Copy, Clone)]
+pub enum Event {
+    SsrcCollision,
+    KeySoftLimit,
+    KeyHardLimit,
+    // XXX(RLB) event_packet_index_limit never emitted in C code
+}
+
+// XXX(RLB) Our version of EventData doesn't pass a reference to the Context, as in the C version.
+// This would confuse the borrow checker, since whenever we're in a position to emit an event, we
+// need to have a mutable borrow active.  A couple of options to clean this up:
+//
+// * Provide UserData in EventData
+// * Refactor Context to hold RefCell<Stream> instead of Stream
+pub struct EventData {
+    pub ssrc: u32,
+    pub event: Event,
+}
+
+pub type EventHandlerFn = fn(data: &EventData);
+
+#[derive(Copy, Clone, Default)]
+pub struct EventHandler {
+    handle_fn: Option<EventHandlerFn>,
+}
+
+impl EventHandler {
+    pub fn set(&mut self, f: EventHandlerFn) {
+        self.handle_fn = Some(f);
+    }
+
+    pub fn clear(&mut self) {
+        self.handle_fn = None;
+    }
+
+    fn handle(&self, ssrc: u32, event: Event) {
+        self.handle_fn.map(|f| {
+            f(&EventData {
+                ssrc: ssrc,
+                event: event,
+            })
+        });
+    }
+}
+
 pub struct Context {
     streams: Vec<Stream>,
     stream_template: Option<Stream>,
-    // XXX(RLB) user_data: Box<dyn Any> ?
+    pub event_handler: EventHandler,
+
+    // XXX(RLB): This is designed to mimic the pattern in the C implementation, which seems to hold
+    // a weak reference, in the sense that a referenced user data object is not freed when the
+    // srtp_t is freed.
+    pub user_data: UserData,
 }
 
 impl Context {
     pub fn new(kernel: &CryptoKernel, policies: &[Policy]) -> Result<Self, Error> {
         let mut ctx = Self {
-            streams: Vec::new(),
-            stream_template: None,
-            // XXX(RLB) user
+            streams: Default::default(),
+            stream_template: Default::default(),
+            event_handler: Default::default(),
+            user_data: Default::default(),
         };
 
         for p in policies {
@@ -672,7 +742,8 @@ impl Context {
         let mut pkt = SrtpPacket::new(pkt_data, pkt_len)?;
 
         // Find or create the correct stream
-        let stream_index = match self.get_stream(pkt.header.ssrc) {
+        let ssrc = pkt.header.ssrc;
+        let stream_index = match self.get_stream(ssrc) {
             Some(x) => x,
             None => {
                 if self.stream_template.is_none() {
@@ -688,13 +759,10 @@ impl Context {
         let stream = &mut self.streams[stream_index];
 
         // Check that the stream is for sending traffic
-        if stream.direction == Direction::Unknown {
-            stream.direction = Direction::Sender
-        } else if stream.direction != Direction::Sender {
-            return Err(Error::Fail); // TODO report ssrc collision
-        }
+        stream.check_ssrc_collision(self.event_handler, Direction::Sender);
 
-        stream.encrypt(&mut pkt, use_mki, mki_index)
+        // Encrypt the packet
+        stream.srtp_encrypt(&mut pkt, use_mki, mki_index, self.event_handler)
     }
 
     pub fn srtp_unprotect(&mut self, pkt_data: &mut [u8]) -> Result<usize, Error> {
@@ -725,17 +793,10 @@ impl Context {
         };
 
         // Verify that stream is for received traffic
-        if stream.direction == Direction::Unknown {
-            stream.direction = Direction::Receiver;
-        }
-
-        if stream.direction != Direction::Receiver {
-            // TODO report SSRC collision
-            return Err(Error::Fail);
-        }
+        stream.check_ssrc_collision(self.event_handler, Direction::Receiver);
 
         // Attempt to authenticate and decrypt the packet
-        stream.decrypt(&mut pkt, index, use_mki)
+        stream.srtp_decrypt(&mut pkt, index, use_mki)
 
         // TODO update usage limits
         // TODO convert to real stream

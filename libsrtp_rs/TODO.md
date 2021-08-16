@@ -7,8 +7,8 @@ TODO
 * [ ] Validate RTCP packet parsing
 * [ ] Finish SRTP protect / unprotect
 * [ ] Complete SRTCP protect / unprotect
-* [ ] User data
-* [ ] Event handler
+* [X] User data
+* [X] Event handler
 * [ ] Debug logging
 * [ ] Short-tag GCM modes
 * [X] Use `Rc<T>` instead of `Box<T>` for crypto objects
