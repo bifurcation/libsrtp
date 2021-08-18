@@ -4,9 +4,9 @@ TODO
 * [X] Validate RTP packet parsing
 * [X] Stream cipher interface with seeking
 * [X] RTCP packet parsing
-* [ ] Validate RTCP packet parsing
-* [ ] Finish SRTP protect / unprotect
-* [ ] Complete SRTCP protect / unprotect
+* [X] Validate RTCP packet parsing
+* [X] Finish SRTP protect / unprotect
+* [ ] Implement SRTCP protect / unprotect
 * [X] User data
 * [X] Event handler
 * [ ] Debug logging
@@ -16,5 +16,9 @@ TODO
 * [ ] Build with `no_std` when crypto library supports
 * [ ] Run `clippy` and implement suggestions
 * [ ] type SrtpResult<T> = Result<T, Error>
+* [ ] Replicate all C tests in Rust
 * [ ] Re-enable C interfaces for everything-but-SRTP; pass tests
 * [ ] Enable C interface for SRTP; pass tests
+* [ ] Crypto library agility (and integration into CMake)
+* [ ] OpenSSL support
+* [ ] mBedTLS support

@@ -192,6 +192,23 @@ impl SessionKeys {
         })
     }
 
+    fn check_key_usage_limit<F>(&mut self, event_handler: F) -> Result<(), Error>
+    where
+        F: Fn(Event),
+    {
+        match self.limit.update() {
+            KeyEvent::Normal => Ok(()),
+            KeyEvent::SoftLimit => {
+                event_handler(Event::KeySoftLimit);
+                Ok(())
+            }
+            KeyEvent::HardLimit => {
+                event_handler(Event::KeyHardLimit);
+                return Err(Error::KeyExpired);
+            }
+        }
+    }
+
     fn srtp_add_auth(&mut self, pkt: &mut SrtpPacket) -> Result<(), Error> {
         let mut inst = self.rtp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
         let mut op = inst.start();
@@ -452,7 +469,7 @@ impl Stream {
             // XXX(RLB) set_packet_index?
             self.rtp_rdbx.set_roc_seq(index.roc(), index.seq())?;
             self.pending_roc = None;
-            self.rtp_rdbx.add(delta)?;
+            self.rtp_rdbx.add(0)?;
         } else {
             match self.rtp_rdbx.check(delta) {
                 Ok(_) => {}
@@ -470,14 +487,7 @@ impl Stream {
         };
 
         // Update the key usage limit
-        match sk.limit.update() {
-            KeyEvent::Normal => {}
-            KeyEvent::SoftLimit => event_handler.handle(ssrc, Event::KeySoftLimit),
-            KeyEvent::HardLimit => {
-                event_handler.handle(ssrc, Event::KeyHardLimit);
-                return Err(Error::KeyExpired);
-            }
-        }
+        sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
 
         // Encrypt the headers
         sk.process_header_extension(pkt, index)?;
@@ -497,9 +507,16 @@ impl Stream {
     pub fn srtp_decrypt(
         &mut self,
         pkt: &mut SrtpPacket,
-        index: ExtendedSequenceNumber,
         use_mki: bool,
+        event_handler: EventHandler,
     ) -> Result<usize, Error> {
+        // Check for SSRC collision
+        self.check_ssrc_collision(event_handler, Direction::Receiver);
+
+        // Estimate the sequence number
+        let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
+        self.rtp_rdbx.check(delta)?;
+
         // Determine which session keys should be used
         let sk = if use_mki {
             pkt.find_mki(&mut self.session_keys).ok_or(Error::BadMki)?
@@ -516,11 +533,25 @@ impl Stream {
             pkt.strip(sk.mki_id.len())?;
         }
 
+        // Update the key usage limit
+        let ssrc = self.ssrc;
+        sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
+
         // Decrypt the headers
         sk.process_header_extension(pkt, index)?;
 
         // Decrypt the payload
         sk.srtp_decrypt(pkt, index)?;
+
+        // Update the replay DB
+        if advance_index {
+            // XXX(RLB) set_packet_index?
+            self.rtp_rdbx.set_roc_seq(index.roc(), index.seq())?;
+            self.pending_roc = None;
+            self.rtp_rdbx.add(0)?;
+        } else {
+            self.rtp_rdbx.add(delta)?;
+        }
 
         Ok(pkt.size())
     }
@@ -688,6 +719,14 @@ impl Context {
         Ok(())
     }
 
+    fn make_stream(&self, ssrc: u32, direction: Direction) -> Result<Stream, Error> {
+        let stream_template = self.stream_template.as_ref().ok_or(Error::NoContext)?;
+        let mut stream = stream_template.clone();
+        stream.ssrc = ssrc;
+        stream.direction = direction;
+        Ok(stream)
+    }
+
     pub fn update_template_streams(
         &mut self,
         kernel: &CryptoKernel,
@@ -750,8 +789,7 @@ impl Context {
                     return Err(Error::NoContext);
                 }
 
-                let mut stream = self.stream_template.as_ref().unwrap().clone();
-                stream.direction = Direction::Sender;
+                let stream = self.make_stream(ssrc, Direction::Sender)?;
                 self.streams.push(stream);
                 self.streams.len() - 1
             }
@@ -777,30 +815,26 @@ impl Context {
         let mut pkt = SrtpPacket::new(pkt_data, pkt_data.len())?;
 
         // Get or create the stream
-        // TODO Add replay checks
-        let (stream, index) = match self.get_stream(pkt.header.ssrc) {
-            None => {
-                let stream = self.stream_template.as_mut().ok_or(Error::NoContext)?;
-                let index = ExtendedSequenceNumber::from_roc_seq(0, pkt.header.seq);
-                (stream, index)
-            }
-            Some(x) => {
-                let stream = &mut self.streams[x];
-                let (index, _delta, _advance_index) =
-                    stream.estimate_packet_index(pkt.header.seq)?;
-                (stream, index)
-            }
+        let ssrc = pkt.header.ssrc;
+        let stream_index = self.get_stream(ssrc);
+        let mut new_stream = match stream_index {
+            Some(_) => None,
+            None => Some(self.make_stream(ssrc, Direction::Receiver)?),
+        };
+        let stream = match stream_index {
+            Some(i) => &mut self.streams[i],
+            None => new_stream.as_mut().ok_or(Error::Fail)?,
         };
 
-        // Verify that stream is for received traffic
-        stream.check_ssrc_collision(self.event_handler, Direction::Receiver);
-
         // Attempt to authenticate and decrypt the packet
-        stream.srtp_decrypt(&mut pkt, index, use_mki)
+        let pt_size = stream.srtp_decrypt(&mut pkt, use_mki, self.event_handler)?;
 
-        // TODO update usage limits
-        // TODO convert to real stream
-        // TODO update replay DB
+        // If decryption succeeded with a new stream, keep the stream
+        if let Some(new_stream) = new_stream {
+            self.streams.push(new_stream);
+        }
+
+        Ok(pt_size)
     }
 
     // TODO srtcp_protect
