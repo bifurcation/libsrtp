@@ -205,13 +205,37 @@ impl PackedSize for TwoByteElementHeader {
 
 // https://datatracker.ietf.org/doc/html/rfc3711#section-3.4
 //
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |V=2|P|    RC   |  PT=SR or RR  |             length            |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                         SSRC of sender                        |
-// +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+//    0                   1                   2                   3
+//    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+<+
+//   |V=2|P|    RC   |   PT=SR or RR   |             length          | |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
+//   |                         SSRC of sender                        | |
+// +>+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+ |
+// | ~                          sender info                          ~ |
+// | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
+// | ~                         report block 1                        ~ |
+// | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
+// | ~                         report block 2                        ~ |
+// | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
+// | ~                              ...                              ~ |
+// | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
+// | |V=2|P|    SC   |  PT=SDES=202  |             length            | |
+// | +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+ |
+// | |                          SSRC/CSRC_1                          | |
+// | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
+// | ~                           SDES items                          ~ |
+// | +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+ |
+// | ~                              ...                              ~ |
+// +>+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+ |
+// | |E|                         SRTCP index                         | |
+// | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+<+
+// | ~                     SRTCP MKI (OPTIONAL)                      ~ |
+// | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
+// | :                     authentication tag                        : |
+// | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
+// |                                                                   |
+// +-- Encrypted Portion                    Authenticated Portion -----+
 #[derive(PackedStruct)]
 #[packed_struct(bit_numbering = "msb0")]
 pub struct RtcpHeader {
@@ -247,10 +271,10 @@ impl PackedSize for RtcpHeader {
 #[packed_struct(bit_numbering = "msb0")]
 pub struct SrtcpTrailer {
     #[packed_field(bits = "0")]
-    e: bool,
+    pub e: bool,
 
     #[packed_field(endian = "msb", bits = "1..32")]
-    index: u32,
+    pub index: u32,
 }
 
 impl PackedSize for SrtcpTrailer {
@@ -580,6 +604,20 @@ impl<'a> SrtcpPacket<'a> {
         Ok(())
     }
 
+    pub fn parse_trailer(&mut self) -> Result<SrtcpTrailer, Error> {
+        if self.trailer_end < SrtcpTrailer::PACKED_SIZE {
+            return Err(Error::BadParam);
+        }
+
+        let trailer_start = self.trailer_end - SrtcpTrailer::PACKED_SIZE;
+        let trailer_data = &mut self.data[trailer_start..self.trailer_end];
+        let trailer = OffsetReader::new(trailer_data).unpack::<SrtcpTrailer>()?;
+
+        self.trailer = Some(trailer);
+        self.trailer_data.copy_from_slice(trailer_data);
+        Ok(trailer)
+    }
+
     pub fn find_mki<'b>(
         &mut self,
         session_keys: &'b mut Vec<SessionKeys>,
@@ -592,7 +630,7 @@ impl<'a> SrtcpPacket<'a> {
                 Err(_) => return None,
             };
 
-            if self.payload_size() < mki_size + tag_size {
+            if self.payload_size() < trailer_size + mki_size + tag_size {
                 continue;
             }
 
@@ -605,20 +643,8 @@ impl<'a> SrtcpPacket<'a> {
 
             // This is our MKI.  End of the packet is trailer || mki || tag
             let trailer_start = mki_start - trailer_size;
-            let mut trailer_data = [0u8; 4];
-            trailer_data.copy_from_slice(&mut self.data[trailer_start..mki_start]);
-
-            let trailer = SrtcpTrailer::unpack(&trailer_data)
-                .map_err(|_| Error::ParseError)
-                .ok();
-            if trailer.is_none() {
-                continue;
-            }
-
             self.payload_end = trailer_start;
             self.trailer_end = mki_start;
-            self.trailer = trailer;
-            self.trailer_data = trailer_data;
             return Some(sk);
         }
         None

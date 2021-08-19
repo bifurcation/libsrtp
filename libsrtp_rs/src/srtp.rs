@@ -3,7 +3,7 @@ use crate::kdf::*;
 use crate::key_limit::*;
 use crate::policy::*;
 use crate::replay::*;
-use crate::rtp_header::SrtpPacket;
+use crate::rtp_header::{SrtcpPacket, SrtpPacket};
 use constant_time_eq::constant_time_eq;
 use std::any::Any;
 use std::rc::{Rc, Weak};
@@ -234,6 +234,31 @@ impl SessionKeys {
         Ok(tag_size)
     }
 
+    fn srtcp_add_auth(&mut self, pkt: &mut SrtcpPacket) -> Result<(), Error> {
+        let mut inst = self.rtcp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut tag = [0u8; 128];
+        let tag_size = op.tag_size();
+        op.compute(pkt.auth_data(), &mut tag)?;
+        pkt.append(tag_size)?.copy_from_slice(&tag[..tag_size]);
+        Ok(())
+    }
+
+    fn srtcp_verify_auth(&mut self, pkt: &SrtcpPacket) -> Result<usize, Error> {
+        let mut inst = self.rtcp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut tag_buf = [0u8; 128];
+        let tag_size = op.tag_size();
+        let tag = &mut tag_buf[..tag_size];
+        op.compute(pkt.auth_data(), tag)?;
+        if !constant_time_eq(tag, pkt.last(tag_size)?) {
+            return Err(Error::AuthFail);
+        }
+        Ok(tag_size)
+    }
+
     fn process_header_extension(
         &mut self,
         pkt: &mut SrtpPacket,
@@ -285,7 +310,47 @@ impl SessionKeys {
 
         op.set_aad(pkt.aad())?;
         let ct_size = pkt.payload_size();
-        let pt_size = op.decrypt(nonce, pkt.payload_for_encrypt(), ct_size)?;
+        let pt_size = op.decrypt(nonce, pkt.payload_for_decrypt(), ct_size)?;
+        pkt.set_payload_size(pt_size)?;
+        Ok(())
+    }
+
+    fn srtcp_encrypt(
+        &mut self,
+        pkt: &mut SrtcpPacket,
+        index: ExtendedSequenceNumber,
+    ) -> Result<(), Error> {
+        let mut inst = self.rtp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut nonce = [0u8; 16];
+        let nonce_size = op.id().nonce_size();
+        let nonce = &mut nonce[..nonce_size];
+        op.rtcp_nonce(pkt.header.ssrc, index as u32, nonce)?;
+
+        let (aad1, aad2) = pkt.aad()?;
+        op.set_aad(aad1)?;
+        op.set_aad(aad2)?;
+        let pt_size = pkt.payload_size();
+        let ct_size = op.encrypt(nonce, pkt.payload_for_encrypt(), pt_size)?;
+        pkt.set_payload_size(ct_size)?;
+        Ok(())
+    }
+
+    fn srtcp_decrypt(&mut self, pkt: &mut SrtcpPacket, index: u32) -> Result<(), Error> {
+        let mut inst = self.rtcp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut nonce = [0u8; 16];
+        let nonce_size = op.id().nonce_size();
+        let nonce = &mut nonce[..nonce_size];
+        op.rtcp_nonce(pkt.header.ssrc, index, nonce)?;
+
+        let (aad1, aad2) = pkt.aad()?;
+        op.set_aad(aad1)?;
+        op.set_aad(aad2)?;
+        let ct_size = pkt.payload_size();
+        let pt_size = op.decrypt(nonce, pkt.payload_for_decrypt(), ct_size)?;
         pkt.set_payload_size(pt_size)?;
         Ok(())
     }
@@ -405,7 +470,7 @@ impl Stream {
         Ok(stream)
     }
 
-    pub fn check_ssrc_collision(&mut self, handler: EventHandler, direction: Direction) {
+    fn check_ssrc_collision(&mut self, handler: &EventHandler, direction: Direction) {
         if self.direction == Direction::Unknown {
             self.direction = direction;
             return;
@@ -456,13 +521,16 @@ impl Stream {
         Ok((estimate, delta, false))
     }
 
-    pub fn srtp_encrypt(
+    pub fn srtp_protect(
         &mut self,
         pkt: &mut SrtpPacket,
         use_mki: bool,
         mki_index: usize,
         event_handler: EventHandler,
     ) -> Result<usize, Error> {
+        // Check that this stream is for sending traffic
+        self.check_ssrc_collision(&event_handler, Direction::Sender);
+
         // Estimate the packet index
         let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
         if advance_index {
@@ -504,14 +572,14 @@ impl Stream {
         Ok(pkt.size())
     }
 
-    pub fn srtp_decrypt(
+    pub fn srtp_unprotect(
         &mut self,
         pkt: &mut SrtpPacket,
         use_mki: bool,
         event_handler: EventHandler,
     ) -> Result<usize, Error> {
         // Check for SSRC collision
-        self.check_ssrc_collision(event_handler, Direction::Receiver);
+        self.check_ssrc_collision(&event_handler, Direction::Receiver);
 
         // Estimate the sequence number
         let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
@@ -552,6 +620,107 @@ impl Stream {
         } else {
             self.rtp_rdbx.add(delta)?;
         }
+
+        Ok(pkt.size())
+    }
+
+    pub fn srtcp_protect(
+        &mut self,
+        pkt: &mut SrtcpPacket,
+        use_mki: bool,
+        mki_index: usize,
+        event_handler: EventHandler,
+    ) -> Result<usize, Error> {
+        // Check that this stream is for sending traffic
+        self.check_ssrc_collision(&event_handler, Direction::Sender);
+
+        // Estimate the packet index
+        let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
+        if advance_index {
+            // XXX(RLB) set_packet_index?
+            self.rtp_rdbx.set_roc_seq(index.roc(), index.seq())?;
+            self.pending_roc = None;
+            self.rtp_rdbx.add(0)?;
+        } else {
+            match self.rtp_rdbx.check(delta) {
+                Ok(_) => {}
+                Err(Error::ReplayFail) if self.allow_repeat_tx => {}
+                Err(err) => return Err(err),
+            };
+            self.rtp_rdbx.add(delta)?;
+        }
+
+        // Look up the session keys by MKI
+        let ssrc = self.ssrc;
+        let services = self.rtcp_services;
+        let sk = match self.get_session_keys(use_mki, mki_index) {
+            Some(x) => x,
+            None => return Err(Error::BadMki),
+        };
+
+        // Set the RTCP trailer
+        pkt.set_e_index(services, index)?;
+
+        // Update the key usage limit
+        sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
+
+        // Encrypt the payload
+        sk.srtcp_encrypt(pkt, index)?;
+
+        // Write the trailer
+        pkt.append_trailer()?;
+
+        // Write the MKI
+        pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
+
+        // Write the tag
+        sk.srtcp_add_auth(pkt)?;
+
+        Ok(pkt.size())
+    }
+
+    pub fn srtcp_unprotect(
+        &mut self,
+        pkt: &mut SrtcpPacket,
+        use_mki: bool,
+        event_handler: EventHandler,
+    ) -> Result<usize, Error> {
+        // Check for SSRC collision
+        self.check_ssrc_collision(&event_handler, Direction::Receiver);
+
+        // Determine which session keys should be used
+        let sk = if use_mki {
+            pkt.find_mki(&mut self.session_keys).ok_or(Error::BadMki)?
+        } else {
+            // XXX(RLB) we might need to parse
+            &mut self.session_keys[0]
+        };
+
+        // Read the sequence number from the trailer and check for replay
+        let trailer = pkt.parse_trailer()?;
+        self.rtcp_rdb.check(trailer.index)?;
+
+        // Verify the authentication tag
+        let tag_size = sk.srtcp_verify_auth(pkt)?;
+
+        // Strip the auth tag, MKI, and trailer
+        pkt.strip(tag_size)?;
+        if use_mki {
+            pkt.strip(sk.mki_id.len())?;
+        }
+        pkt.strip_trailer()?;
+
+        // Update the key usage limit
+        let ssrc = self.ssrc;
+        sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
+
+        // Decrypt the payload
+        if trailer.e {
+            sk.srtcp_decrypt(pkt, trailer.index)?;
+        }
+
+        // Update the replay DB
+        self.rtcp_rdb.add(trailer.index)?;
 
         Ok(pkt.size())
     }
@@ -796,11 +965,8 @@ impl Context {
         };
         let stream = &mut self.streams[stream_index];
 
-        // Check that the stream is for sending traffic
-        stream.check_ssrc_collision(self.event_handler, Direction::Sender);
-
         // Encrypt the packet
-        stream.srtp_encrypt(&mut pkt, use_mki, mki_index, self.event_handler)
+        stream.srtp_protect(&mut pkt, use_mki, mki_index, self.event_handler)
     }
 
     pub fn srtp_unprotect(&mut self, pkt_data: &mut [u8]) -> Result<usize, Error> {
@@ -827,7 +993,7 @@ impl Context {
         };
 
         // Attempt to authenticate and decrypt the packet
-        let pt_size = stream.srtp_decrypt(&mut pkt, use_mki, self.event_handler)?;
+        let pt_size = stream.srtp_unprotect(&mut pkt, use_mki, self.event_handler)?;
 
         // If decryption succeeded with a new stream, keep the stream
         if let Some(new_stream) = new_stream {
@@ -837,9 +1003,70 @@ impl Context {
         Ok(pt_size)
     }
 
-    // TODO srtcp_protect
-    // TODO srtcp_protect_mki
+    pub fn srtcp_protect(&mut self, pkt_data: &mut [u8], pkt_len: usize) -> Result<usize, Error> {
+        self.srtcp_protect_mki(pkt_data, pkt_len, false, 0)
+    }
 
-    // TODO srtcp_unprotect
-    // TODO srtcp_unprotect_mki
+    pub fn srtcp_protect_mki(
+        &mut self,
+        pkt_data: &mut [u8],
+        pkt_len: usize,
+        use_mki: bool,
+        mki_index: usize,
+    ) -> Result<usize, Error> {
+        let mut pkt = SrtcpPacket::new(pkt_data, pkt_len)?;
+
+        // Find or create the correct stream
+        let ssrc = pkt.header.ssrc;
+        let stream_index = match self.get_stream(ssrc) {
+            Some(x) => x,
+            None => {
+                if self.stream_template.is_none() {
+                    return Err(Error::NoContext);
+                }
+
+                let stream = self.make_stream(ssrc, Direction::Sender)?;
+                self.streams.push(stream);
+                self.streams.len() - 1
+            }
+        };
+        let stream = &mut self.streams[stream_index];
+
+        // Encrypt the packet
+        stream.srtcp_protect(&mut pkt, use_mki, mki_index, self.event_handler)
+    }
+
+    pub fn srtcp_unprotect(&mut self, pkt_data: &mut [u8]) -> Result<usize, Error> {
+        self.srtp_unprotect_mki(pkt_data, false)
+    }
+
+    pub fn srtcp_unprotect_mki(
+        &mut self,
+        pkt_data: &mut [u8],
+        use_mki: bool,
+    ) -> Result<usize, Error> {
+        let mut pkt = SrtcpPacket::new(pkt_data, pkt_data.len())?;
+
+        // Get or create the stream
+        let ssrc = pkt.header.ssrc;
+        let stream_index = self.get_stream(ssrc);
+        let mut new_stream = match stream_index {
+            Some(_) => None,
+            None => Some(self.make_stream(ssrc, Direction::Receiver)?),
+        };
+        let stream = match stream_index {
+            Some(i) => &mut self.streams[i],
+            None => new_stream.as_mut().ok_or(Error::Fail)?,
+        };
+
+        // Attempt to authenticate and decrypt the packet
+        let pt_size = stream.srtcp_unprotect(&mut pkt, use_mki, self.event_handler)?;
+
+        // If decryption succeeded with a new stream, keep the stream
+        if let Some(new_stream) = new_stream {
+            self.streams.push(new_stream);
+        }
+
+        Ok(pt_size)
+    }
 }
