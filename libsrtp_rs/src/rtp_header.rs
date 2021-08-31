@@ -1076,7 +1076,7 @@ mod test {
         Ok(())
     }
 
-    // SRTP Values (others borrowed from above)
+    // SRTCP Values (others borrowed from above)
     const PLAINTEXT_PACKET_RTCP: &'static [u8] = &[
         // Header
         0x80, 0x0f, 0x12, 0x34, 0xde, 0xca, 0xfb, 0xad, // Payload...
@@ -1192,6 +1192,7 @@ mod test {
 
         // Find MKI
         pkt.find_mki(&mut sks).ok_or(Error::Fail)?;
+        pkt.parse_trailer()?;
 
         // Verify that auth input is as expected
         assert_eq!(pkt.auth_data(), AUTH_DATA_RTCP);
