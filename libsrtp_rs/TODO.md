@@ -10,7 +10,7 @@ TODO
 * [X] User data
 * [X] Event handler
 * [X] Use `Rc<T>` instead of `Box<T>` for crypto objects
-* [ ] SRTP and SRTCP validation
+* [X] SRTP and SRTCP validation
 * [ ] Convert all hex literals to use `hex!()`
 * [ ] Replicate all C tests in Rust
 * [ ] Debug logging
@@ -25,16 +25,4 @@ TODO
 * [ ] OpenSSL support
 * [ ] mBedTLS support
 * [ ] Instead of SsrcType, make Ssrc an enum
-
-
-## Validation Test Matrix
-
-* SRTP
-  * Encrypted extensions
-  * AEAD / not
-  * MKI / not
-* SRTCP
-  * AEAD / not
-  * MKI / not
-  * Encrypted / auth-only
 

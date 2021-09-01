@@ -223,6 +223,7 @@ impl CipherType for NativeAesIcm {
 mod tests {
     use super::*;
     use crate::crypto_test;
+    use hex_literal::hex;
 
     #[test]
     fn test_aes_icm_128() -> Result<(), Error> {
@@ -295,24 +296,13 @@ mod tests {
 
     #[test]
     fn test_rtp_xtn_header_example() -> Result<(), Error> {
-        let key: [u8; 16] = [
-            0x54, 0x97, 0x52, 0x05, 0x4d, 0x6f, 0xb7, 0x08, 0x62, 0x2c, 0x4a, 0x2e, 0x59, 0x6a,
-            0x1b, 0x93,
-        ];
-        let salt: [u8; 14] = [
-            0xab, 0x01, 0x81, 0x81, 0x74, 0xc4, 0x0d, 0x39, 0xa3, 0x78, 0x1f, 0x7c, 0x2d, 0x27,
-        ];
+        let key = hex!("549752054d6fb708622c4a2e596a1b93");
+        let salt = hex!("ab01818174c40d39a3781f7c2d27");
         let ssrc: u32 = 0xcafebabe;
         let ext_seq_num: ExtendedSequenceNumber = 0x0000001234;
         let ranges: &'static [Range<usize>] = &[1..9, 14..15, 16..23];
-        let pt: &'static [u8] = &[
-            0x17, 0x41, 0x42, 0x73, 0xa4, 0x75, 0x26, 0x27, 0x48, 0x22, 0x00, 0x00, 0xc8, 0x30,
-            0x8e, 0x46, 0x55, 0x99, 0x63, 0x86, 0xb3, 0x95, 0xfb, 0x00,
-        ];
-        let ct: &'static [u8] = &[
-            0x17, 0x58, 0x8A, 0x92, 0x70, 0xF4, 0xE1, 0x5E, 0x1C, 0x22, 0x00, 0x00, 0xC8, 0x30,
-            0x95, 0x46, 0xA9, 0x94, 0xF0, 0xBC, 0x54, 0x78, 0x97, 0x00,
-        ];
+        let pt = hex!("17414273a475262748220000c8308e4655996386b395fb00");
+        let ct = hex!("17588A9270F4E15E1C220000C8309546A994F0BC54789700");
 
         let cipher_type: Box<dyn ExtensionCipherType> =
             Box::new(NativeAesIcm::new(AesKeySize::Aes128));
@@ -320,7 +310,7 @@ mod tests {
 
         // Verify correct encryption
         let mut encrypt_buffer = [0u8; 24];
-        encrypt_buffer.copy_from_slice(pt);
+        encrypt_buffer.copy_from_slice(&pt);
         cipher.init(ssrc, ext_seq_num)?;
         for r in ranges {
             cipher.xor_key(&mut encrypt_buffer[r.clone()], r.clone())?;
@@ -332,26 +322,15 @@ mod tests {
 
     #[test]
     fn test_rtp_example() -> Result<(), Error> {
-        let key: [u8; 16] = [
-            0xc6, 0x1e, 0x7a, 0x93, 0x74, 0x4f, 0x39, 0xee, 0x10, 0x73, 0x4a, 0xfe, 0x3f, 0xf7,
-            0xa0, 0x87,
-        ];
-        let salt: [u8; 14] = [
-            0x30, 0xcb, 0xbc, 0x08, 0x86, 0x3d, 0x8c, 0x85, 0xd4, 0x9d, 0xb3, 0x4a, 0x9a, 0xe1,
-        ];
+        let key = hex!("c61e7a93744f39ee10734afe3ff7a087");
+        let salt = hex!("30cbbc08863d8c85d49db34a9ae1");
         let ssrc: u32 = 0xcafebabe;
         let ext_seq_num: ExtendedSequenceNumber = 0x0000001234;
-        let expected_nonce: [u8; 16] = [
-            // 30cbbc08863d8c85d49db34a9ae1 ^ 00000000cafebabe000000001234 || 0000
-            0x30, 0xcb, 0xbc, 0x08, 0x4c, 0xc3, 0x36, 0x3b, 0xd4, 0x9d, 0xb3, 0x4a, 0x88, 0xd5,
-            0x00, 0x00,
-        ];
+        // (30cbbc08863d8c85d49db34a9ae1 ^ 00000000cafebabe000000001234) || 0000
+        let expected_nonce = hex!("30cbbc084cc3363bd49db34a88d50000");
         let aad = [];
-        let pt: [u8; 16] = [0xab; 16];
-        let ct: [u8; 16] = [
-            0x4e, 0x55, 0xdc, 0x4c, 0xe7, 0x99, 0x78, 0xd8, 0x8c, 0xa4, 0xd2, 0x15, 0x94, 0x9d,
-            0x24, 0x02,
-        ];
+        let pt = [0xab; 16];
+        let ct = hex!("4e55dc4ce79978d88ca4d215949d2402");
 
         let cipher_type: Box<dyn CipherType> = Box::new(NativeAesIcm::new(AesKeySize::Aes128));
         let mut cipher = cipher_type.create(&key, &salt)?;
