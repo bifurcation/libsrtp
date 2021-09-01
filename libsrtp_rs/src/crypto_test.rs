@@ -141,12 +141,12 @@ impl CipherTest {
         let pt_size = self.plaintext.len();
         let ct_size = self.ciphertext.len();
 
-        // TODO Verify nonce formation
-
         // Encrypt
         let mut enc_vec = vec![0u8; ct_size];
         let enc_buffer = enc_vec.as_mut_slice();
         enc_buffer[..pt_size].copy_from_slice(self.plaintext);
+
+        cipher.reset();
         cipher.set_aad(self.aad)?;
         let enc_len = cipher.encrypt(self.nonce, enc_buffer, pt_size)?;
         if enc_len != ct_size {
@@ -160,6 +160,8 @@ impl CipherTest {
         let mut dec_vec = vec![0u8; ct_size];
         let dec_buffer = dec_vec.as_mut_slice();
         dec_buffer.copy_from_slice(self.ciphertext);
+
+        cipher.reset();
         cipher.set_aad(self.aad)?;
         let dec_len = cipher.decrypt(self.nonce, dec_buffer, ct_size)?;
         if dec_len != pt_size {

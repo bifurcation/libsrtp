@@ -1,9 +1,7 @@
 use crate::crypto_kernel::TagSize;
 use crate::policy::SecurityServices;
-use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::{Error, SessionKeys};
 use packed_struct::prelude::*;
-use std::convert::TryInto;
 use std::ops::Range;
 
 trait PackedSize {
@@ -236,7 +234,7 @@ impl PackedSize for TwoByteElementHeader {
 // | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
 // |                                                                   |
 // +-- Encrypted Portion                    Authenticated Portion -----+
-#[derive(PackedStruct)]
+#[derive(PackedStruct, Debug)]
 #[packed_struct(bit_numbering = "msb0")]
 pub struct RtcpHeader {
     #[packed_field(bits = "0..2")]
@@ -252,7 +250,7 @@ pub struct RtcpHeader {
     pub pt: u8,
 
     #[packed_field(endian = "msb")]
-    pub seq: u16,
+    pub length: u16,
 
     #[packed_field(endian = "msb")]
     pub ssrc: u32,
@@ -267,7 +265,7 @@ impl PackedSize for RtcpHeader {
 // +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
 // |E|                         SRTCP index                         |
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#[derive(PackedStruct, Copy, Clone)]
+#[derive(PackedStruct, Copy, Clone, Debug)]
 #[packed_struct(bit_numbering = "msb0")]
 pub struct SrtcpTrailer {
     #[packed_field(bits = "0")]
@@ -454,6 +452,26 @@ impl<'a> SrtpPacket<'a> {
         None
     }
 
+    pub fn find_tag(&mut self, sk: &SessionKeys) -> Result<(), Error> {
+        if self.payload_end != self.packet_end {
+            // This method should only be called on a not-yet-fully-parsed packet
+            return Err(Error::BadParam);
+        }
+
+        let tag_size = match sk.rtp_auth.tag_size() {
+            Ok(x) => x,
+            Err(_) => return Err(Error::BadParam),
+        };
+
+        let payload_size = self.payload_end - self.payload_start;
+        if tag_size > payload_size {
+            return Err(Error::BadParam);
+        }
+
+        self.payload_end -= tag_size;
+        Ok(())
+    }
+
     pub fn extensions<'b>(&'b mut self) -> Result<RtpExtensionReader<'b>, Error> {
         if self.ext_header.is_none() {
             return Ok(RtpExtensionReader::empty());
@@ -552,6 +570,7 @@ impl<'a> SrtpPacket<'a> {
 // XXX(RLB) There's some duplicate logic here with SrtpPacket, e.g., around finding MKI/tag and
 // appending/stripping.  It wasn't immediately clear to me how to improve this situation given that
 // Rust lacks the sort of structure composition that C++ has.
+#[derive(Debug)]
 pub struct SrtcpPacket<'a> {
     pub data: &'a mut [u8],
 
@@ -588,14 +607,10 @@ impl<'a> SrtcpPacket<'a> {
         })
     }
 
-    pub fn set_e_index(
-        &mut self,
-        services: SecurityServices,
-        index: ExtendedSequenceNumber,
-    ) -> Result<(), Error> {
+    pub fn set_e_index(&mut self, services: SecurityServices, index: u32) -> Result<(), Error> {
         let trailer = SrtcpTrailer {
             e: services.confidentiality(),
-            index: index.try_into().map_err(|_| Error::BadParam)?,
+            index: index,
         };
         let trailer_data = trailer.pack().map_err(|_| Error::Fail)?;
 
@@ -625,7 +640,7 @@ impl<'a> SrtcpPacket<'a> {
         for sk in session_keys {
             let trailer_size = SrtcpTrailer::PACKED_SIZE;
             let mki_size = sk.mki_id.len();
-            let tag_size = match sk.rtp_auth.tag_size() {
+            let tag_size = match sk.rtcp_auth.tag_size() {
                 Ok(x) => x,
                 Err(_) => return None,
             };
@@ -650,12 +665,38 @@ impl<'a> SrtcpPacket<'a> {
         None
     }
 
-    pub fn aad<'b>(&'b mut self) -> Result<(&'b [u8], &'b [u8]), Error> {
+    pub fn find_tag(&mut self, sk: &SessionKeys) -> Result<(), Error> {
+        if self.payload_end != self.packet_end || self.trailer_end != self.packet_end {
+            // This method should only be called on a not-yet-fully-parsed packet
+            return Err(Error::BadParam);
+        }
+
+        let tag_size = match sk.rtcp_auth.tag_size() {
+            Ok(x) => x,
+            Err(_) => return Err(Error::BadParam),
+        };
+
+        let trailer_size = SrtcpTrailer::PACKED_SIZE;
+        let payload_size = self.payload_end - self.payload_start;
+        if tag_size + trailer_size > payload_size {
+            return Err(Error::BadParam);
+        }
+
+        self.trailer_end = self.packet_end - tag_size;
+        self.payload_end = self.packet_end - tag_size - trailer_size;
+        Ok(())
+    }
+
+    pub fn aad<'b>(&'b mut self, overhead: usize) -> Result<(&'b [u8], &'b [u8]), Error> {
         let trailer = self.trailer.as_ref().ok_or(Error::BadParam)?;
         let base_aad_end = if trailer.e {
             RtcpHeader::PACKED_SIZE
         } else {
-            self.payload_end
+            if self.payload_end < overhead {
+                return Err(Error::BadParam);
+            }
+
+            self.payload_end - overhead
         };
 
         Ok((&self.data[..base_aad_end], &self.trailer_data))
@@ -665,8 +706,24 @@ impl<'a> SrtcpPacket<'a> {
         &self.data[..self.trailer_end]
     }
 
-    pub fn payload_for_encrypt<'b>(&'b mut self) -> &'b mut [u8] {
-        &mut self.data[self.payload_start..]
+    pub fn payload_for_encrypt<'b>(&'b mut self, auth_only: bool) -> &'b mut [u8] {
+        if auth_only {
+            &mut self.data[self.payload_end..]
+        } else {
+            &mut self.data[self.payload_start..]
+        }
+    }
+
+    pub fn payload_for_decrypt_tag_only<'b>(
+        &'b mut self,
+        overhead: usize,
+    ) -> Result<&'b mut [u8], Error> {
+        if overhead > self.payload_size() {
+            return Err(Error::BadParam);
+        }
+
+        let tag_start = self.payload_end - overhead;
+        Ok(&mut self.data[tag_start..self.payload_end])
     }
 
     pub fn payload_for_decrypt<'b>(&'b mut self) -> &'b mut [u8] {
@@ -713,8 +770,7 @@ impl<'a> SrtcpPacket<'a> {
 
         let trailer = self.trailer_data;
         let trailer_size = SrtcpTrailer::PACKED_SIZE;
-        let buffer = self.append(trailer_size)?;
-        buffer.copy_from_slice(&trailer);
+        self.append(trailer_size)?.copy_from_slice(&trailer);
         self.trailer_end = self.payload_end + trailer_size;
         Ok(())
     }
@@ -1128,24 +1184,22 @@ mod test {
         pkt.set_e_index(SecurityServices::ConfAndAuth, 1)?;
 
         // Verify that AAD is as expected (with and without encryption)
-        let (base_aad, trailer_aad) = pkt.aad()?;
+        let (base_aad, trailer_aad) = pkt.aad(0)?;
         assert_eq!([base_aad, trailer_aad].concat(), AAD_RTCP_E);
 
         pkt.trailer.as_mut().unwrap().e = false;
-        let (base_aad, trailer_aad) = pkt.aad()?;
+        let (base_aad, trailer_aad) = pkt.aad(0)?;
         assert_eq!([base_aad, trailer_aad].concat(), AAD_RTCP_NOT_E);
         pkt.trailer.as_mut().unwrap().e = true;
 
         // Emulate encrypting payload
         let pt_size = pkt.payload_size();
-        println!("before: {:02x?} {}", pkt.data, pt_size);
         let ct_size = encrypt(
-            pkt.payload_for_encrypt(),
+            pkt.payload_for_encrypt(false),
             PAYLOAD_KEYSTREAM_RTCP,
             PAYLOAD_TAG_RTCP,
             pt_size,
         );
-        println!("after : {:02x?}", pkt.data);
         pkt.set_payload_size(ct_size)?;
 
         // Append trailer
@@ -1209,7 +1263,7 @@ mod test {
         pkt.strip_trailer()?;
 
         // Verify that AAD is as expected
-        let (base_aad, trailer_aad) = pkt.aad()?;
+        let (base_aad, trailer_aad) = pkt.aad(0)?;
         assert_eq!([base_aad, trailer_aad].concat(), AAD_RTCP_E);
 
         // Emulate decrypting payload
@@ -1224,7 +1278,7 @@ mod test {
 
         // Check that AAD without encryption is as expected
         pkt.trailer.as_mut().unwrap().e = false;
-        let (base_aad, trailer_aad) = pkt.aad()?;
+        let (base_aad, trailer_aad) = pkt.aad(0)?;
         assert_eq!([base_aad, trailer_aad].concat(), AAD_RTCP_NOT_E);
         pkt.trailer.as_mut().unwrap().e = true;
 

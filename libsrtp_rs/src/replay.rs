@@ -63,7 +63,7 @@ impl ReplayDB {
         }
 
         // otherwise, the index is okay
-        return Ok(());
+        Ok(())
     }
 
     pub fn add(&mut self, index: u32) -> Result<(), Error> {
@@ -83,16 +83,16 @@ impl ReplayDB {
         self.bitmask.shift(new_window_start - self.window_start);
         self.bitmask.set(Bitmask::BITS - 1);
         self.window_start = new_window_start;
-        return Ok(());
+        Ok(())
     }
 
-    pub fn increment(&mut self) -> Result<(), Error> {
+    pub fn increment(&mut self) -> Result<u32, Error> {
         if self.window_start >= 0x7fffffff {
             return Err(Error::KeyExpired);
         }
 
         self.window_start += 1;
-        return Ok(());
+        Ok(self.window_start)
     }
 
     pub fn get_value(&self) -> u32 {

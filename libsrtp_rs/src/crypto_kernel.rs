@@ -272,6 +272,7 @@ impl CipherTypeID {
 
 pub trait Cipher: Reset {
     fn id(&self) -> CipherTypeID;
+    fn overhead(&self) -> usize;
 
     fn rtp_nonce(
         &self,

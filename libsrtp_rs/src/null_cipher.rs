@@ -31,6 +31,10 @@ impl Cipher for Context {
         CipherTypeID::Null
     }
 
+    fn overhead(&self) -> usize {
+        0
+    }
+
     fn rtp_nonce(
         &self,
         _ssrc: u32,

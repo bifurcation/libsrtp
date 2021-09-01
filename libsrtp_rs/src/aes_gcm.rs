@@ -56,6 +56,10 @@ where
         self.key_size.as_gcm_id()
     }
 
+    fn overhead(&self) -> usize {
+        Self::TAG_SIZE
+    }
+
     // https://datatracker.ietf.org/doc/html/rfc7714#section-8.3
     //
     //   0  0  0  0  0  0  0  0  0  0  1  1
@@ -107,12 +111,13 @@ where
     }
 
     fn set_aad(&mut self, aad: &[u8]) -> Result<(), Error> {
-        if aad.len() > Self::MAX_AAD_SIZE {
+        let new_aad_size = self.aad_size + aad.len();
+        if new_aad_size > Self::MAX_AAD_SIZE {
             return Err(Error::CipherFail);
         }
 
-        self.aad_size = aad.len();
-        self.aad[..self.aad_size].copy_from_slice(aad);
+        self.aad[self.aad_size..new_aad_size].copy_from_slice(aad);
+        self.aad_size = new_aad_size;
         Ok(())
     }
 
@@ -145,6 +150,7 @@ where
 
         let nonce = Nonce::from_slice(&nonce);
         let aad = &self.aad[..self.aad_size];
+
         self.cipher
             .decrypt_in_place_detached(nonce, aad, &mut buf[..pt_size], tag)
             .map_err(|_| Error::AuthFail)?;
@@ -254,12 +260,15 @@ mod tests {
         // Verify correct encryption
         let mut enc_buffer = [0u8; 32];
         enc_buffer[..pt.len()].copy_from_slice(&pt);
+
+        cipher.reset();
         cipher.set_aad(&aad)?;
         let ct_size = cipher.encrypt(&nonce, &mut enc_buffer, pt.len())?;
         assert_eq!(ct_size, ct.len());
         assert_eq!(enc_buffer, ct);
 
         // Verify correct decryption
+        cipher.reset();
         cipher.set_aad(&aad)?;
         let pt_size = cipher.decrypt(&nonce, &mut enc_buffer, ct.len())?;
         assert_eq!(pt_size, pt.len());

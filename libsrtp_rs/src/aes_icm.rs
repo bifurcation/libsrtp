@@ -109,7 +109,6 @@ where
     fn init(&mut self, ssrc: u32, ext_seq_num: ExtendedSequenceNumber) -> Result<(), Error> {
         let mut iv = [0u8; 16];
         self.make_rtp_nonce(ssrc, ext_seq_num, &mut iv[..Self::NONCE_SIZE])?;
-        println!("iv: {:02x?}", iv);
 
         let iv = GenericArray::from_slice(&iv);
         let key = GenericArray::from_slice(self.key());
@@ -144,6 +143,10 @@ where
 {
     fn id(&self) -> CipherTypeID {
         self.key_size.as_icm_id()
+    }
+
+    fn overhead(&self) -> usize {
+        0
     }
 
     fn rtp_nonce(
@@ -322,8 +325,6 @@ mod tests {
         for r in ranges {
             cipher.xor_key(&mut encrypt_buffer[r.clone()], r.clone())?;
         }
-        println!("enc_buf:   {:02x?}", encrypt_buffer);
-        println!("ct:        {:02x?}", ct);
         assert_eq!(encrypt_buffer, ct);
 
         Ok(())

@@ -60,6 +60,7 @@ impl ProfileID {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct CryptoPolicy {
     pub cipher_type: CipherTypeID,
     pub cipher_key_len: usize,
@@ -70,183 +71,148 @@ pub struct CryptoPolicy {
 }
 
 impl CryptoPolicy {
-    pub fn rtp_default() -> Self {
-        Self::aes_cm_128_hmac_sha1_80()
-    }
+    pub const RTP_DEFAULT: Self = Self::AES_CM_128_HMAC_SHA1_80;
+    pub const RTCP_DEFAULT: Self = Self::AES_CM_128_HMAC_SHA1_80;
 
-    pub fn rtcp_default() -> Self {
-        Self::aes_cm_128_hmac_sha1_80()
-    }
+    // Should only be used for testing
+    pub const NULL_CIPHER_NULL_AUTH: Self = Self {
+        cipher_type: CipherTypeID::Null,
+        cipher_key_len: 0,
+        auth_type: AuthTypeID::Null,
+        auth_key_len: 0,
+        auth_tag_len: 0,
+        sec_serv: SecurityServices::None,
+    };
 
-    pub fn null_cipher_null_auth() -> Self {
-        // Should only be used for testing
-        Self {
-            cipher_type: CipherTypeID::Null,
-            cipher_key_len: 0,
-            auth_type: AuthTypeID::Null,
-            auth_key_len: 0,
-            auth_tag_len: 0,
-            sec_serv: SecurityServices::None,
-        }
-    }
+    // Corresponds to RFC 4568
+    pub const NULL_CIPHER_HMAC_SHA1_32: Self = Self {
+        cipher_type: CipherTypeID::Null,
+        cipher_key_len: 0,
+        auth_type: AuthTypeID::HmacSha1,
+        auth_key_len: 20,
+        auth_tag_len: 4,
+        sec_serv: SecurityServices::None,
+    };
 
-    pub fn null_cipher_hmac_sha1_32() -> Self {
-        // Corresponds to RFC 4568
-        Self {
-            cipher_type: CipherTypeID::Null,
-            cipher_key_len: 0,
-            auth_type: AuthTypeID::HmacSha1,
-            auth_key_len: 20,
-            auth_tag_len: 4,
-            sec_serv: SecurityServices::None,
-        }
-    }
+    // Corresponds to RFC 4568
+    pub const NULL_CIPHER_HMAC_SHA1_80: Self = Self {
+        cipher_type: CipherTypeID::Null,
+        cipher_key_len: 0,
+        auth_type: AuthTypeID::HmacSha1,
+        auth_key_len: 20,
+        auth_tag_len: 10,
+        sec_serv: SecurityServices::None,
+    };
 
-    pub fn null_cipher_hmac_sha1_80() -> Self {
-        // Corresponds to RFC 4568
-        Self {
-            cipher_type: CipherTypeID::Null,
-            cipher_key_len: 0,
-            auth_type: AuthTypeID::HmacSha1,
-            auth_key_len: 20,
-            auth_tag_len: 10,
-            sec_serv: SecurityServices::None,
-        }
-    }
+    // Corresponds to RFC 4568
+    // note that this crypto policy is intended for SRTP, but not SRTCP
+    pub const AES_CM_128_NULL_AUTH: Self = Self {
+        cipher_type: CipherTypeID::AesIcm128,
+        cipher_key_len: constants::AES_ICM_128_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::Null,
+        auth_key_len: 0,
+        auth_tag_len: 0,
+        sec_serv: SecurityServices::Conf,
+    };
 
-    pub fn aes_cm_128_null_auth() -> Self {
-        // Corresponds to RFC 4568
-        // note that this crypto policy is intended for SRTP, but not SRTCP
-        Self {
-            cipher_type: CipherTypeID::AesIcm128,
-            cipher_key_len: constants::AES_ICM_128_KEY_LEN_WSALT,
-            auth_type: AuthTypeID::Null,
-            auth_key_len: 0,
-            auth_tag_len: 0,
-            sec_serv: SecurityServices::Conf,
-        }
-    }
+    // Corresponds to RFC 4568
+    // note that this crypto policy is intended for SRTP, but not SRTCP
+    pub const AES_CM_128_HMAC_SHA1_32: Self = Self {
+        cipher_type: CipherTypeID::AesIcm128,
+        cipher_key_len: constants::AES_ICM_128_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::HmacSha1,
+        auth_key_len: 20,
+        auth_tag_len: 4,
+        sec_serv: SecurityServices::ConfAndAuth,
+    };
 
-    pub fn aes_cm_128_hmac_sha1_32() -> Self {
-        // Corresponds to RFC 4568
-        // note that this crypto policy is intended for SRTP, but not SRTCP
-        Self {
-            cipher_type: CipherTypeID::AesIcm128,
-            cipher_key_len: constants::AES_ICM_128_KEY_LEN_WSALT,
-            auth_type: AuthTypeID::HmacSha1,
-            auth_key_len: 20,
-            auth_tag_len: 4,
-            sec_serv: SecurityServices::ConfAndAuth,
-        }
-    }
+    // Corresponds to RFC 4568
+    pub const AES_CM_128_HMAC_SHA1_80: Self = Self {
+        cipher_type: CipherTypeID::AesIcm128,
+        cipher_key_len: constants::AES_ICM_128_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::HmacSha1,
+        auth_key_len: 20,
+        auth_tag_len: 10,
+        sec_serv: SecurityServices::ConfAndAuth,
+    };
 
-    pub fn aes_cm_128_hmac_sha1_80() -> Self {
-        // Corresponds to RFC 4568
-        Self {
-            cipher_type: CipherTypeID::AesIcm128,
-            cipher_key_len: constants::AES_ICM_128_KEY_LEN_WSALT,
-            auth_type: AuthTypeID::HmacSha1,
-            auth_key_len: 20,
-            auth_tag_len: 10,
-            sec_serv: SecurityServices::ConfAndAuth,
-        }
-    }
+    pub const AES_CM_192_NULL_AUTH: Self = Self::NULL_CIPHER_NULL_AUTH; // TODO
+    pub const AES_CM_192_HMAC_SHA1_32: Self = Self::NULL_CIPHER_NULL_AUTH; // TODO
+    pub const AES_CM_192_HMAC_SHA1_80: Self = Self::NULL_CIPHER_NULL_AUTH; // TODO
 
-    pub fn aes_cm_192_null_auth() -> Self {
-        Self::null_cipher_null_auth() // TODO
-    }
+    // Corresponds to RFC 4568
+    // note that this crypto policy is intended for SRTP, but not SRTCP
+    pub const AES_CM_256_NULL_AUTH: Self = Self {
+        cipher_type: CipherTypeID::AesIcm256,
+        cipher_key_len: constants::AES_ICM_256_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::Null,
+        auth_key_len: 0,
+        auth_tag_len: 0,
+        sec_serv: SecurityServices::Conf,
+    };
 
-    pub fn aes_cm_192_hmac_sha1_32() -> Self {
-        Self::null_cipher_null_auth() // TODO
-    }
+    // Corresponds to RFC 4568
+    // note that this crypto policy is intended for SRTP, but not SRTCP
+    pub const AES_CM_256_HMAC_SHA1_32: Self = Self {
+        cipher_type: CipherTypeID::AesIcm256,
+        cipher_key_len: constants::AES_ICM_256_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::HmacSha1,
+        auth_key_len: 20,
+        auth_tag_len: 4,
+        sec_serv: SecurityServices::ConfAndAuth,
+    };
 
-    pub fn aes_cm_192_hmac_sha1_80() -> Self {
-        Self::null_cipher_null_auth() // TODO
-    }
+    // Corresponds to RFC 4568
+    pub const AES_CM_256_HMAC_SHA1_80: Self = Self {
+        cipher_type: CipherTypeID::AesIcm256,
+        cipher_key_len: constants::AES_ICM_256_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::HmacSha1,
+        auth_key_len: 20,
+        auth_tag_len: 10,
+        sec_serv: SecurityServices::ConfAndAuth,
+    };
 
-    pub fn aes_cm_256_null_auth() -> Self {
-        // Corresponds to RFC 4568
-        // note that this crypto policy is intended for SRTP, but not SRTCP
-        Self {
-            cipher_type: CipherTypeID::AesIcm256,
-            cipher_key_len: constants::AES_ICM_256_KEY_LEN_WSALT,
-            auth_type: AuthTypeID::Null,
-            auth_key_len: 0,
-            auth_tag_len: 0,
-            sec_serv: SecurityServices::Conf,
-        }
-    }
+    // Corresponds to RFC 7714
+    pub const AES_GCM_128: Self = Self {
+        cipher_type: CipherTypeID::AesGcm128,
+        cipher_key_len: constants::AES_GCM_128_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::Null,
+        auth_key_len: 0,
+        auth_tag_len: 0,
+        sec_serv: SecurityServices::ConfAndAuth,
+    };
 
-    pub fn aes_cm_256_hmac_sha1_32() -> Self {
-        // Corresponds to RFC 4568
-        // note that this crypto policy is intended for SRTP, but not SRTCP
-        Self {
-            cipher_type: CipherTypeID::AesIcm256,
-            cipher_key_len: constants::AES_ICM_256_KEY_LEN_WSALT,
-            auth_type: AuthTypeID::HmacSha1,
-            auth_key_len: 20,
-            auth_tag_len: 4,
-            sec_serv: SecurityServices::ConfAndAuth,
-        }
-    }
+    // Corresponds to RFC 7714
+    pub const AES_GCM_256: Self = Self {
+        cipher_type: CipherTypeID::AesGcm256,
+        cipher_key_len: constants::AES_GCM_256_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::Null,
+        auth_key_len: 0,
+        auth_tag_len: 0,
+        sec_serv: SecurityServices::ConfAndAuth,
+    };
 
-    pub fn aes_cm_256_hmac_sha1_80() -> Self {
-        // Corresponds to RFC 4568
-        Self {
-            cipher_type: CipherTypeID::AesIcm256,
-            cipher_key_len: constants::AES_ICM_256_KEY_LEN_WSALT,
-            auth_type: AuthTypeID::HmacSha1,
-            auth_key_len: 20,
-            auth_tag_len: 10,
-            sec_serv: SecurityServices::ConfAndAuth,
-        }
-    }
-
-    pub fn aes_gcm_128() -> Self {
-        // Corresponds to RFC 7714
-        Self {
-            cipher_type: CipherTypeID::AesGcm128,
-            cipher_key_len: constants::AES_GCM_128_KEY_LEN_WSALT,
-            auth_type: AuthTypeID::Null,
-            auth_key_len: 0,
-            auth_tag_len: 0,
-            sec_serv: SecurityServices::ConfAndAuth,
-        }
-    }
-
-    pub fn aes_gcm_256() -> Self {
-        // Corresponds to RFC 7714
-        Self {
-            cipher_type: CipherTypeID::AesGcm256,
-            cipher_key_len: constants::AES_GCM_256_KEY_LEN_WSALT,
-            auth_type: AuthTypeID::Null,
-            auth_key_len: 0,
-            auth_tag_len: 0,
-            sec_serv: SecurityServices::ConfAndAuth,
-        }
-    }
-
-    pub fn from_profile_rtp(id: ProfileID) -> Self {
+    pub const fn from_profile_rtp(id: ProfileID) -> Self {
         match id {
-            ProfileID::Aes128CmSha180 => Self::aes_cm_128_hmac_sha1_80(),
-            ProfileID::Aes128CmSha132 => Self::aes_cm_128_hmac_sha1_32(),
-            ProfileID::NullSha180 => Self::null_cipher_hmac_sha1_80(),
-            ProfileID::NullSha132 => Self::null_cipher_hmac_sha1_32(),
-            ProfileID::AeadAes128Gcm => Self::aes_gcm_128(),
-            ProfileID::AeadAes256Gcm => Self::aes_gcm_256(),
+            ProfileID::Aes128CmSha180 => Self::AES_CM_128_HMAC_SHA1_80,
+            ProfileID::Aes128CmSha132 => Self::AES_CM_128_HMAC_SHA1_32,
+            ProfileID::NullSha180 => Self::NULL_CIPHER_HMAC_SHA1_80,
+            ProfileID::NullSha132 => Self::NULL_CIPHER_HMAC_SHA1_32,
+            ProfileID::AeadAes128Gcm => Self::AES_GCM_128,
+            ProfileID::AeadAes256Gcm => Self::AES_GCM_256,
         }
     }
 
-    pub fn from_profile_rtcp(id: ProfileID) -> Self {
+    pub const fn from_profile_rtcp(id: ProfileID) -> Self {
         match id {
-            ProfileID::Aes128CmSha180 => Self::aes_cm_128_hmac_sha1_80(),
-            ProfileID::Aes128CmSha132 => Self::aes_cm_128_hmac_sha1_32(),
-            ProfileID::NullSha180 => Self::null_cipher_hmac_sha1_80(),
+            ProfileID::Aes128CmSha180 => Self::AES_CM_128_HMAC_SHA1_80,
+            ProfileID::Aes128CmSha132 => Self::AES_CM_128_HMAC_SHA1_32,
+            ProfileID::NullSha180 => Self::NULL_CIPHER_HMAC_SHA1_80,
             // We do not honor the 32-bit auth tag request
             // since this is not compliant with RFC 3711
-            ProfileID::NullSha132 => Self::null_cipher_hmac_sha1_80(),
-            ProfileID::AeadAes128Gcm => Self::aes_gcm_128(),
-            ProfileID::AeadAes256Gcm => Self::aes_gcm_256(),
+            ProfileID::NullSha132 => Self::NULL_CIPHER_HMAC_SHA1_80,
+            ProfileID::AeadAes128Gcm => Self::AES_GCM_128,
+            ProfileID::AeadAes256Gcm => Self::AES_GCM_256,
         }
     }
 }
@@ -260,11 +226,13 @@ pub enum SsrcType {
     Outbound = 3,
 }
 
+#[derive(Copy, Clone)]
 pub struct Ssrc {
     pub type_: SsrcType,
     pub value: u32,
 }
 
+#[derive(Clone)]
 pub struct MasterKey {
     pub key: Vec<u8>,
     pub salt: Vec<u8>,
@@ -273,6 +241,7 @@ pub struct MasterKey {
 
 pub type ExtensionHeaderId = u8;
 
+#[derive(Clone)]
 pub struct Policy {
     pub ssrc: Ssrc,
     pub rtp: CryptoPolicy,
@@ -280,11 +249,11 @@ pub struct Policy {
     pub keys: Vec<MasterKey>,
     pub window_size: usize,
     pub allow_repeat_tx: bool,
-    pub enc_xtn_hdr: Vec<ExtensionHeaderId>,
+    pub xtn_headers_to_encrypt: Vec<ExtensionHeaderId>,
 }
 
 impl Policy {
     pub fn validate_master_keys(&self) -> bool {
-        self.keys.is_empty()
+        !self.keys.is_empty()
     }
 }

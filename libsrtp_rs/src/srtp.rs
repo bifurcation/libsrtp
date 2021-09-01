@@ -104,7 +104,6 @@ impl<'a> CipherFactory<'a> {
         let mut salt_buffer = [0u8; 14];
         let salt = &mut salt_buffer[..cipher_type.salt_size()];
         self.kdf.generate(salt_label, &mut salt[..salt_size])?;
-
         self.kernel.cipher(cipher_type, key, salt)
     }
 
@@ -112,12 +111,12 @@ impl<'a> CipherFactory<'a> {
         &self,
         auth_type: AuthTypeID,
         key_label: KdfLabel,
+        key_size: usize,
         tag_size: usize,
     ) -> Result<AuthInstance, Error> {
         let mut key_buffer = [0u8; 20];
-        let key = &mut key_buffer[..auth_type.key_size()];
+        let key = &mut key_buffer[..key_size];
         self.kdf.generate(key_label, key)?;
-
         self.kernel.auth(auth_type, key, tag_size)
     }
 }
@@ -167,7 +166,12 @@ impl SessionKeys {
         )?;
 
         // Set up RTP authentication
-        let rtp_auth = factory.auth(rtp.auth_type, KdfLabel::RtpMsgAuth, rtp.auth_tag_len)?;
+        let rtp_auth = factory.auth(
+            rtp.auth_type,
+            KdfLabel::RtpMsgAuth,
+            rtp.auth_key_len,
+            rtp.auth_tag_len,
+        )?;
 
         // Set up the RTCP cipher
         let rtcp_cipher = factory.cipher(
@@ -178,7 +182,12 @@ impl SessionKeys {
         )?;
 
         // Set up RTCP authentication
-        let rtcp_auth = factory.auth(rtcp.auth_type, KdfLabel::RtcpMsgAuth, rtcp.auth_tag_len)?;
+        let rtcp_auth = factory.auth(
+            rtcp.auth_type,
+            KdfLabel::RtcpMsgAuth,
+            rtcp.auth_key_len,
+            rtcp.auth_tag_len,
+        )?;
 
         Ok(SessionKeys {
             rtp_cipher: rtp_cipher,
@@ -209,43 +218,57 @@ impl SessionKeys {
         }
     }
 
-    fn srtp_add_auth(&mut self, pkt: &mut SrtpPacket) -> Result<(), Error> {
-        let mut inst = self.rtp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
-        let mut op = inst.start();
-
-        let mut tag = [0u8; 128];
-        let tag_size = op.tag_size();
-        op.compute(pkt.auth_data(), &mut tag)?;
-        pkt.append(tag_size)?.copy_from_slice(&tag[..tag_size]);
-        Ok(())
-    }
-
-    fn srtp_verify_auth(&mut self, pkt: &SrtpPacket) -> Result<usize, Error> {
+    fn srtp_add_auth(&mut self, pkt: &mut SrtpPacket, roc: RolloverCounter) -> Result<(), Error> {
         let mut inst = self.rtp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
         let mut op = inst.start();
 
         let mut tag_buf = [0u8; 128];
         let tag_size = op.tag_size();
         let tag = &mut tag_buf[..tag_size];
-        op.compute(pkt.auth_data(), tag)?;
-        if !constant_time_eq(tag, pkt.last(tag_size)?) {
+
+        op.update(pkt.auth_data())?;
+        op.compute(&roc.to_be_bytes(), tag)?;
+        pkt.append(tag_size)?.copy_from_slice(tag);
+        Ok(())
+    }
+
+    fn srtp_verify_auth(
+        &mut self,
+        pkt: &mut SrtpPacket,
+        roc: RolloverCounter,
+    ) -> Result<(), Error> {
+        let mut inst = self.rtp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut op = inst.start();
+
+        let mut tag_buf = [0u8; 128];
+        let tag_size = op.tag_size();
+        let tag = &mut tag_buf[..tag_size];
+
+        op.update(pkt.auth_data())?;
+        op.compute(&roc.to_be_bytes(), tag)?;
+        let pkt_tag = pkt.last(tag_size)?;
+        if !constant_time_eq(tag, pkt_tag) {
             return Err(Error::AuthFail);
         }
-        Ok(tag_size)
+
+        pkt.strip(tag_size)?;
+        Ok(())
     }
 
     fn srtcp_add_auth(&mut self, pkt: &mut SrtcpPacket) -> Result<(), Error> {
         let mut inst = self.rtcp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
         let mut op = inst.start();
 
-        let mut tag = [0u8; 128];
+        let mut tag_buf = [0u8; 128];
         let tag_size = op.tag_size();
-        op.compute(pkt.auth_data(), &mut tag)?;
-        pkt.append(tag_size)?.copy_from_slice(&tag[..tag_size]);
+        let tag = &mut tag_buf[..tag_size];
+
+        op.compute(pkt.auth_data(), tag)?;
+        pkt.append(tag_size)?.copy_from_slice(tag);
         Ok(())
     }
 
-    fn srtcp_verify_auth(&mut self, pkt: &SrtcpPacket) -> Result<usize, Error> {
+    fn srtcp_verify_auth(&mut self, pkt: &mut SrtcpPacket) -> Result<(), Error> {
         let mut inst = self.rtcp_auth.try_borrow_mut().map_err(|_| Error::Fail)?;
         let mut op = inst.start();
 
@@ -256,13 +279,16 @@ impl SessionKeys {
         if !constant_time_eq(tag, pkt.last(tag_size)?) {
             return Err(Error::AuthFail);
         }
-        Ok(tag_size)
+
+        pkt.strip(tag_size)?;
+        Ok(())
     }
 
     fn process_header_extension(
         &mut self,
         pkt: &mut SrtpPacket,
         index: ExtendedSequenceNumber,
+        headers_to_encrypt: &Vec<u8>,
     ) -> Result<(), Error> {
         let mut inst = self
             .rtp_xtn_hdr_cipher
@@ -270,8 +296,12 @@ impl SessionKeys {
             .map_err(|_| Error::Fail)?;
         let mut op = inst.start();
         op.init(pkt.header.ssrc, index)?;
-        pkt.extensions()?
-            .apply(|ext| op.xor_key(ext.data, ext.range))?;
+        pkt.extensions()?.apply(|ext| {
+            if !headers_to_encrypt.contains(&ext.id) {
+                return Ok(());
+            }
+            op.xor_key(ext.data, ext.range)
+        })?;
         Ok(())
     }
 
@@ -287,8 +317,8 @@ impl SessionKeys {
         let nonce_size = op.id().nonce_size();
         let nonce = &mut nonce[..nonce_size];
         op.rtp_nonce(pkt.header.ssrc, index, nonce)?;
-
         op.set_aad(pkt.aad())?;
+
         let pt_size = pkt.payload_size();
         let ct_size = op.encrypt(nonce, pkt.payload_for_encrypt(), pt_size)?;
         pkt.set_payload_size(ct_size)?;
@@ -318,9 +348,10 @@ impl SessionKeys {
     fn srtcp_encrypt(
         &mut self,
         pkt: &mut SrtcpPacket,
-        index: ExtendedSequenceNumber,
+        auth_only: bool,
+        index: u32,
     ) -> Result<(), Error> {
-        let mut inst = self.rtp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let mut inst = self.rtcp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
         let mut op = inst.start();
 
         let mut nonce = [0u8; 16];
@@ -328,16 +359,28 @@ impl SessionKeys {
         let nonce = &mut nonce[..nonce_size];
         op.rtcp_nonce(pkt.header.ssrc, index as u32, nonce)?;
 
-        let (aad1, aad2) = pkt.aad()?;
+        let (aad1, aad2) = pkt.aad(0)?;
         op.set_aad(aad1)?;
         op.set_aad(aad2)?;
+
         let pt_size = pkt.payload_size();
-        let ct_size = op.encrypt(nonce, pkt.payload_for_encrypt(), pt_size)?;
+        let ct_size = if auth_only {
+            let overhead = op.encrypt(nonce, pkt.payload_for_encrypt(true), 0)?;
+            pt_size + overhead
+        } else {
+            op.encrypt(nonce, pkt.payload_for_encrypt(false), pt_size)?
+        };
+
         pkt.set_payload_size(ct_size)?;
         Ok(())
     }
 
-    fn srtcp_decrypt(&mut self, pkt: &mut SrtcpPacket, index: u32) -> Result<(), Error> {
+    fn srtcp_decrypt(
+        &mut self,
+        pkt: &mut SrtcpPacket,
+        auth_only: bool,
+        index: u32,
+    ) -> Result<(), Error> {
         let mut inst = self.rtcp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
         let mut op = inst.start();
 
@@ -346,63 +389,25 @@ impl SessionKeys {
         let nonce = &mut nonce[..nonce_size];
         op.rtcp_nonce(pkt.header.ssrc, index, nonce)?;
 
-        let (aad1, aad2) = pkt.aad()?;
+        let overhead = op.overhead();
+        let (aad1, aad2) = pkt.aad(overhead)?;
         op.set_aad(aad1)?;
         op.set_aad(aad2)?;
+
         let ct_size = pkt.payload_size();
-        let pt_size = op.decrypt(nonce, pkt.payload_for_decrypt(), ct_size)?;
+        let pt_size = if auth_only {
+            let payload = pkt.payload_for_decrypt_tag_only(overhead)?;
+            let remaining_tag = op.decrypt(nonce, payload, overhead)?;
+            if remaining_tag != 0 {
+                return Err(Error::BadParam);
+            }
+
+            ct_size - overhead
+        } else {
+            op.decrypt(nonce, pkt.payload_for_decrypt(), ct_size)?
+        };
+
         pkt.set_payload_size(pt_size)?;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_session_keys() -> Result<(), Error> {
-        // Verify that keys are derived in the same way as libsrtp in C
-        let kernel = CryptoKernel::default()?;
-        let key = MasterKey {
-            key: vec![
-                0xe1, 0xf9, 0x7a, 0x0d, 0x3e, 0x01, 0x8b, 0xe0, 0xd6, 0x4f, 0xa3, 0x2c, 0x06, 0xde,
-                0x41, 0x39,
-            ],
-            salt: vec![
-                0x0e, 0xc6, 0x75, 0xad, 0x49, 0x8a, 0xfe, 0xeb, 0xb6, 0x96, 0x0b, 0x3a, 0xab, 0xe6,
-            ],
-            id: vec![],
-        };
-        let rtp_policy = CryptoPolicy::rtp_default();
-        let rtcp_policy = CryptoPolicy::rtcp_default();
-
-        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtcp_policy)?;
-        // TODO verify that the keys are right
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_session_keys_gcm() -> Result<(), Error> {
-        // Verify that keys are derived in the same way as libsrtp in C
-        let kernel = CryptoKernel::default()?;
-        let key = MasterKey {
-            key: vec![
-                0xe1, 0xf9, 0x7a, 0x0d, 0x3e, 0x01, 0x8b, 0xe0, 0xd6, 0x4f, 0xa3, 0x2c, 0x06, 0xde,
-                0x41, 0x39,
-            ],
-            salt: vec![
-                0x0e, 0xc6, 0x75, 0xad, 0x49, 0x8a, 0xfe, 0xeb, 0xb6, 0x96, 0x0b, 0x3a,
-            ],
-            id: vec![],
-        };
-        let rtp_policy = CryptoPolicy::aes_gcm_128();
-        let rtcp_policy = CryptoPolicy::aes_gcm_128();
-
-        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtcp_policy)?;
-        // TODO verify that the keys are right
-
         Ok(())
     }
 }
@@ -417,7 +422,7 @@ struct Stream {
     rtcp_services: SecurityServices,
     direction: Direction,
     allow_repeat_tx: bool,
-    enc_xtn_hdr: Vec<ExtensionHeaderId>,
+    xtn_headers_to_encrypt: Vec<ExtensionHeaderId>,
     pending_roc: Option<RolloverCounter>,
 }
 
@@ -439,10 +444,10 @@ impl Stream {
             rtp_rdbx: ExtendedReplayDB::new(policy.window_size)?,
             rtcp_rdb: ReplayDB::new(),
             rtp_services: policy.rtp.sec_serv,
-            rtcp_services: policy.rtp.sec_serv,
+            rtcp_services: policy.rtcp.sec_serv,
             direction: Direction::Unknown,
             allow_repeat_tx: policy.allow_repeat_tx,
-            enc_xtn_hdr: policy.enc_xtn_hdr.clone(),
+            xtn_headers_to_encrypt: policy.xtn_headers_to_encrypt.clone(),
             pending_roc: None,
         })
     }
@@ -548,7 +553,10 @@ impl Stream {
         }
 
         // Look up the session keys by MKI
+        // XXX(RLB): These copies are needed to satisfy the borrow checker, since we hold on to the
+        // sk reference to self.  It would be nice to have a more elegant approach.
         let ssrc = self.ssrc;
+        let xtn_headers_to_encrypt = self.xtn_headers_to_encrypt.clone();
         let sk = match self.get_session_keys(use_mki, mki_index) {
             Some(x) => x,
             None => return Err(Error::BadMki),
@@ -558,16 +566,18 @@ impl Stream {
         sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
 
         // Encrypt the headers
-        sk.process_header_extension(pkt, index)?;
+        sk.process_header_extension(pkt, index, &xtn_headers_to_encrypt)?;
 
         // Encrypt the payload
         sk.srtp_encrypt(pkt, index)?;
 
-        // Write the MKI
-        pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
+        // Write the MKI if required
+        if use_mki {
+            pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
+        }
 
         // Write the tag
-        sk.srtp_add_auth(pkt)?;
+        sk.srtp_add_auth(pkt, index.roc())?;
 
         Ok(pkt.size())
     }
@@ -589,14 +599,14 @@ impl Stream {
         let sk = if use_mki {
             pkt.find_mki(&mut self.session_keys).ok_or(Error::BadMki)?
         } else {
+            pkt.find_tag(&self.session_keys[0])?;
             &mut self.session_keys[0]
         };
 
-        // Verify the authentication tag
-        let tag_size = sk.srtp_verify_auth(pkt)?;
+        // Verify and strip the authentication tag
+        sk.srtp_verify_auth(pkt, index.roc())?;
 
-        // Strip the auth tag and MKI
-        pkt.strip(tag_size)?;
+        // Strip the MKI
         if use_mki {
             pkt.strip(sk.mki_id.len())?;
         }
@@ -605,11 +615,11 @@ impl Stream {
         let ssrc = self.ssrc;
         sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
 
-        // Decrypt the headers
-        sk.process_header_extension(pkt, index)?;
-
         // Decrypt the payload
         sk.srtp_decrypt(pkt, index)?;
+
+        // Decrypt the headers
+        sk.process_header_extension(pkt, index, &self.xtn_headers_to_encrypt)?;
 
         // Update the replay DB
         if advance_index {
@@ -634,21 +644,8 @@ impl Stream {
         // Check that this stream is for sending traffic
         self.check_ssrc_collision(&event_handler, Direction::Sender);
 
-        // Estimate the packet index
-        let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
-        if advance_index {
-            // XXX(RLB) set_packet_index?
-            self.rtp_rdbx.set_roc_seq(index.roc(), index.seq())?;
-            self.pending_roc = None;
-            self.rtp_rdbx.add(0)?;
-        } else {
-            match self.rtp_rdbx.check(delta) {
-                Ok(_) => {}
-                Err(Error::ReplayFail) if self.allow_repeat_tx => {}
-                Err(err) => return Err(err),
-            };
-            self.rtp_rdbx.add(delta)?;
-        }
+        // Calculate the packet index
+        let index = self.rtcp_rdb.increment()?;
 
         // Look up the session keys by MKI
         let ssrc = self.ssrc;
@@ -664,14 +661,17 @@ impl Stream {
         // Update the key usage limit
         sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
 
-        // Encrypt the payload
-        sk.srtcp_encrypt(pkt, index)?;
+        // Encrypt the payload if required
+        let auth_only = !services.confidentiality();
+        sk.srtcp_encrypt(pkt, auth_only, index)?;
 
         // Write the trailer
         pkt.append_trailer()?;
 
         // Write the MKI
-        pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
+        if use_mki {
+            pkt.append(sk.mki_id.len())?.copy_from_slice(&sk.mki_id);
+        }
 
         // Write the tag
         sk.srtcp_add_auth(pkt)?;
@@ -692,19 +692,22 @@ impl Stream {
         let sk = if use_mki {
             pkt.find_mki(&mut self.session_keys).ok_or(Error::BadMki)?
         } else {
-            // XXX(RLB) we might need to parse
+            pkt.find_tag(&self.session_keys[0])?;
             &mut self.session_keys[0]
         };
 
         // Read the sequence number from the trailer and check for replay
+        // XXX(RLB) libsrtp accepts unencrypted RTCP packets even if the local security service
+        // description specifies confidentiality.  It seems like we should check for:
+        //
+        //     if self.rtcp_services.confidentiality() && !trailer.e { /* fail */ }
         let trailer = pkt.parse_trailer()?;
         self.rtcp_rdb.check(trailer.index)?;
 
-        // Verify the authentication tag
-        let tag_size = sk.srtcp_verify_auth(pkt)?;
+        // Verify and strip the authentication tag
+        sk.srtcp_verify_auth(pkt)?;
 
-        // Strip the auth tag, MKI, and trailer
-        pkt.strip(tag_size)?;
+        // Strip the MKI, and trailer
         if use_mki {
             pkt.strip(sk.mki_id.len())?;
         }
@@ -714,10 +717,8 @@ impl Stream {
         let ssrc = self.ssrc;
         sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
 
-        // Decrypt the payload
-        if trailer.e {
-            sk.srtcp_decrypt(pkt, trailer.index)?;
-        }
+        // Decrypt the payload if required
+        sk.srtcp_decrypt(pkt, !trailer.e, trailer.index)?;
 
         // Update the replay DB
         self.rtcp_rdb.add(trailer.index)?;
@@ -1037,7 +1038,7 @@ impl Context {
     }
 
     pub fn srtcp_unprotect(&mut self, pkt_data: &mut [u8]) -> Result<usize, Error> {
-        self.srtp_unprotect_mki(pkt_data, false)
+        self.srtcp_unprotect_mki(pkt_data, false)
     }
 
     pub fn srtcp_unprotect_mki(
@@ -1068,5 +1069,352 @@ impl Context {
         }
 
         Ok(pt_size)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn test_session_keys() -> Result<(), Error> {
+        // Verify that keys are derived in the same way as libsrtp in C
+        let kernel = CryptoKernel::default()?;
+        let key = MasterKey {
+            key: hex!("e1f97a0d3e018be0d64fa32c06de4139").into(),
+            salt: hex!("0ec675ad498afeebb6960b3aabe6").into(),
+            id: [].into(),
+        };
+        let rtp_policy = CryptoPolicy::RTP_DEFAULT;
+        let rtcp_policy = CryptoPolicy::RTP_DEFAULT;
+
+        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtcp_policy)?;
+        // TODO verify that the keys are right
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_keys_gcm() -> Result<(), Error> {
+        // Verify that keys are derived in the same way as libsrtp in C
+        let kernel = CryptoKernel::default()?;
+        let key = MasterKey {
+            key: hex!("e1f97a0d3e018be0d64fa32c06de4139").into(),
+            salt: hex!("0ec675ad498afeebb6960b3aabe6").into(),
+            id: [].into(),
+        };
+        let rtp_policy = CryptoPolicy::AES_GCM_128;
+        let rtcp_policy = CryptoPolicy::AES_GCM_128;
+
+        let _ = SessionKeys::new(&kernel, &key, &rtp_policy, &rtcp_policy)?;
+        // TODO verify that the keys are right
+
+        Ok(())
+    }
+
+    // Common parameters for validation tests
+    const KEY: &'static [u8] = &hex!("e1f97a0d3e018be0d64fa32c06de4139");
+    const SALT: &'static [u8] = &hex!("0ec675ad498afeebb6960b3aabe6");
+    const AEAD_SALT: &'static [u8] = &hex!("0ec675ad498afeebb6960b3a");
+    const MKI: &'static [u8] = &hex!("e1f97a0d");
+    const SHORT_AUTH_KEY_POLICY: CryptoPolicy = CryptoPolicy {
+        cipher_type: CipherTypeID::AesIcm128,
+        cipher_key_len: constants::AES_ICM_128_KEY_LEN_WSALT,
+        auth_type: AuthTypeID::HmacSha1,
+        auth_key_len: 16,
+        auth_tag_len: 10,
+        sec_serv: SecurityServices::ConfAndAuth,
+    };
+
+    // RTP Validation tests
+    struct RtpValidationTest {
+        aead: bool,
+        mki: bool,
+        enc_ext: bool,
+        ciphertext: &'static [u8],
+    }
+
+    impl RtpValidationTest {
+        const PLAINTEXT: &'static [u8] = &hex![
+            "
+            900f1234decafbad
+            cafebabebede0006
+            17414273A4752627
+            48220000C8308E46
+            55996386B395FB00
+            abababababababab
+            abababababababab"
+        ];
+        const ENCRYPTED_HEADERS: [u8; 3] = [1, 3, 4];
+
+        fn validate(&self) -> Result<(), Error> {
+            let mut policy = Policy {
+                ssrc: Ssrc {
+                    type_: SsrcType::Outbound,
+                    value: 0,
+                },
+                rtp: SHORT_AUTH_KEY_POLICY,
+                rtcp: SHORT_AUTH_KEY_POLICY,
+                keys: vec![MasterKey {
+                    key: KEY.to_vec(),
+                    salt: SALT.to_vec(),
+                    id: MKI.to_vec(),
+                }],
+                window_size: 128,
+                allow_repeat_tx: false,
+                xtn_headers_to_encrypt: vec![],
+            };
+
+            if self.aead {
+                policy.rtp = CryptoPolicy::AES_GCM_128;
+                policy.rtcp = CryptoPolicy::AES_GCM_128;
+                policy.keys[0].salt = AEAD_SALT.to_vec();
+            }
+
+            if self.enc_ext {
+                policy.xtn_headers_to_encrypt = Self::ENCRYPTED_HEADERS.into();
+            }
+
+            let policies = [policy];
+
+            let kernel = CryptoKernel::default()?;
+            let mut ctx_send = Context::new(&kernel, &policies)?;
+            let mut ctx_recv = Context::new(&kernel, &policies)?;
+
+            let pt_size = Self::PLAINTEXT.len();
+            let mut buffer = [0u8; 80];
+            buffer[..pt_size].copy_from_slice(Self::PLAINTEXT);
+
+            // Verify that encryption produces the correct ciphertext
+            let ct_size = if self.mki {
+                ctx_send.srtp_protect_mki(&mut buffer, pt_size, true, 0)?
+            } else {
+                ctx_send.srtp_protect(&mut buffer, pt_size)?
+            };
+            assert_eq!(self.ciphertext, &buffer[..ct_size]);
+
+            // Verify that decryption succeeds on the ciphertext
+            let pt_size = if self.mki {
+                ctx_recv.srtp_unprotect_mki(&mut buffer[..ct_size], true)?
+            } else {
+                ctx_recv.srtp_unprotect(&mut buffer[..ct_size])?
+            };
+            assert_eq!(Self::PLAINTEXT, &mut buffer[..pt_size]);
+
+            Ok(())
+        }
+    }
+
+    const RTP_VALIDATION_TESTS: &[RtpValidationTest] = &[
+        RtpValidationTest {
+            aead: false,
+            mki: false,
+            enc_ext: false,
+            ciphertext: &hex!(
+                "900f1234decafbadcafebabebede000617414273a475262748220000c8308e46
+                 55996386b395fb004e55dc4ce79978d88ca4d215949d24023f8b392545c2fbb0
+                 c33c"
+            ),
+        },
+        RtpValidationTest {
+            aead: false,
+            mki: true,
+            enc_ext: false,
+            ciphertext: &hex!(
+                "900f1234decafbadcafebabebede000617414273a475262748220000c8308e46
+                 55996386b395fb004e55dc4ce79978d88ca4d215949d2402e1f97a0d3f8b3925
+                 45c2fbb0c33c"
+            ),
+        },
+        RtpValidationTest {
+            aead: false,
+            mki: false,
+            enc_ext: true,
+            ciphertext: &hex!(
+                "900f1234decafbadcafebabebede000617588a9270f4e15e1c220000c8309546
+                 a994f0bc547897004e55dc4ce79978d88ca4d215949d24026e89a746e7607c5e
+                 3ad2"
+            ),
+        },
+        RtpValidationTest {
+            aead: true,
+            mki: false,
+            enc_ext: false,
+            ciphertext: &hex!(
+                "900f1234decafbadcafebabebede000617414273a475262748220000c8308e46
+                 55996386b395fb000eca0cf95ee955b26cd3d288b49f6ca9e0eb4eab09af2bae
+                 f6804f141b9b02b0"
+            ),
+        },
+        RtpValidationTest {
+            aead: true,
+            mki: true,
+            enc_ext: false,
+            ciphertext: &hex!(
+                "900f1234decafbadcafebabebede000617414273a475262748220000c8308e46
+                 55996386b395fb000eca0cf95ee955b26cd3d288b49f6ca9e0eb4eab09af2bae
+                 f6804f141b9b02b0e1f97a0d"
+            ),
+        },
+        RtpValidationTest {
+            aead: true,
+            mki: false,
+            enc_ext: true,
+            ciphertext: &hex!(
+                "900f1234decafbadcafebabebede00061712e0205bfa949b1c220000c
+                 830bb46732778d9929aab000eca0cf95ee955b26cd3d288b49f6ca9f4
+                 b1b759719eb5bc113b9ff1d40cd25a"
+            ),
+        },
+    ];
+
+    #[test]
+    fn test_rtp_validation() -> Result<(), Error> {
+        for test in RTP_VALIDATION_TESTS {
+            test.validate()?
+        }
+        Ok(())
+    }
+
+    // RTCP Validation tests
+    struct RtcpValidationTest {
+        aead: bool,
+        mki: bool,
+        auth_only: bool,
+        ciphertext: &'static [u8],
+    }
+
+    impl RtcpValidationTest {
+        const PLAINTEXT: &'static [u8] = &hex![
+            "c80006f3cb200183ab03a1eb020b3a000094200000009e00009b8881ca0005f3
+             cb2001010a6f757468616e6e656c00000000"
+        ];
+
+        fn validate(&self) -> Result<(), Error> {
+            let mut policy = Policy {
+                ssrc: Ssrc {
+                    type_: SsrcType::Outbound,
+                    value: 0,
+                },
+                rtp: SHORT_AUTH_KEY_POLICY,
+                rtcp: SHORT_AUTH_KEY_POLICY,
+                keys: vec![MasterKey {
+                    key: KEY.to_vec(),
+                    salt: SALT.to_vec(),
+                    id: MKI.to_vec(),
+                }],
+                window_size: 128,
+                allow_repeat_tx: false,
+                xtn_headers_to_encrypt: vec![],
+            };
+
+            if self.aead {
+                policy.rtcp = CryptoPolicy::AES_GCM_128;
+                policy.keys[0].salt = AEAD_SALT.to_vec();
+            }
+
+            if self.auth_only {
+                policy.rtcp.sec_serv = SecurityServices::Auth;
+            }
+
+            let policies = [policy];
+
+            let kernel = CryptoKernel::default()?;
+            let mut ctx_send = Context::new(&kernel, &policies)?;
+            let mut ctx_recv = Context::new(&kernel, &policies)?;
+
+            let pt_size = Self::PLAINTEXT.len();
+            let mut buffer = [0u8; 80];
+            buffer[..pt_size].copy_from_slice(Self::PLAINTEXT);
+
+            // Verify that encryption produces the correct ciphertext
+            let ct_size = if self.mki {
+                ctx_send.srtcp_protect_mki(&mut buffer, pt_size, true, 0)?
+            } else {
+                ctx_send.srtcp_protect(&mut buffer, pt_size)?
+            };
+
+            assert_eq!(self.ciphertext, &buffer[..ct_size]);
+
+            // Verify that decryption succeeds on the ciphertext
+            let pt_size = if self.mki {
+                ctx_recv.srtcp_unprotect_mki(&mut buffer[..ct_size], true)?
+            } else {
+                ctx_recv.srtcp_unprotect(&mut buffer[..ct_size])?
+            };
+            assert_eq!(Self::PLAINTEXT, &mut buffer[..pt_size]);
+
+            Ok(())
+        }
+    }
+
+    const RTCP_VALIDATION_TESTS: &[RtcpValidationTest] = &[
+        RtcpValidationTest {
+            aead: false,
+            mki: false,
+            auth_only: false,
+            ciphertext: &hex!(
+                "c80006f3cb200183d7b53de643149ee23197d69da86eb8b476dcf161580c9ae3
+                 d8e26db3cffc5cb14ac1c94e3462f2a6469480000001243caf328e5bd739d438"
+            ),
+        },
+        RtcpValidationTest {
+            aead: false,
+            mki: true,
+            auth_only: false,
+            ciphertext: &hex!(
+                "c80006f3cb200183d7b53de643149ee23197d69da86eb8b476dcf161580c9ae3
+                 d8e26db3cffc5cb14ac1c94e3462f2a6469480000001e1f97a0d243caf328e5b
+                 d739d438"
+            ),
+        },
+        RtcpValidationTest {
+            aead: false,
+            mki: false,
+            auth_only: true,
+            ciphertext: &hex!(
+                "c80006f3cb200183ab03a1eb020b3a000094200000009e00009b8881ca0005f3
+                 cb2001010a6f757468616e6e656c0000000000000001d7a9661ceb221a2ec208"
+            ),
+        },
+        RtcpValidationTest {
+            aead: true,
+            mki: false,
+            auth_only: false,
+            ciphertext: &hex!(
+                "c80006f3cb2001836e87f6bdcdb482b1997e0b097cae3c38df506b92692b408d
+                 da5a40326902a488b6126e8d229a810cedec9de3e6e4876bc08e75eda2f7dc33
+                 67a080000001"
+            ),
+        },
+        RtcpValidationTest {
+            aead: true,
+            mki: true,
+            auth_only: false,
+            ciphertext: &hex!(
+                "c80006f3cb2001836e87f6bdcdb482b1997e0b097cae3c38df506b92692b408d
+                 da5a40326902a488b6126e8d229a810cedec9de3e6e4876bc08e75eda2f7dc33
+                 67a080000001e1f97a0d"
+            ),
+        },
+        RtcpValidationTest {
+            aead: true,
+            mki: false,
+            auth_only: true,
+            ciphertext: &hex!(
+                "c80006f3cb200183ab03a1eb020b3a000094200000009e00009b8881ca0005f3
+                 cb2001010a6f757468616e6e656c000000001963d61ae031b347f39bc3ad9fbb
+                 64fc00000001"
+            ),
+        },
+    ];
+
+    #[test]
+    fn test_rtcp_validation() -> Result<(), Error> {
+        for test in RTCP_VALIDATION_TESTS {
+            test.validate()?
+        }
+        Ok(())
     }
 }
