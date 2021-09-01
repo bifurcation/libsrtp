@@ -11,9 +11,11 @@ use aes::cipher::{
     BlockCipher, BlockEncrypt, NewBlockCipher,
 };
 use aes::{Aes128, Aes192, Aes256};
-use ctr::cipher::{NewCipher, StreamCipher, StreamCipherSeek};
+use ctr::cipher::{FromBlockCipher, NewCipher, StreamCipher, StreamCipherSeek};
 use ctr::Ctr128BE;
 use std::ops::Range;
+
+type Nonce<C> = GenericArray<u8, <Ctr128BE<C> as FromBlockCipher>::NonceSize>;
 
 #[derive(Clone)]
 struct Context<C>
@@ -23,6 +25,7 @@ where
     key_size: AesKeySize,
     key: [u8; 32],
     salt: [u8; 14],
+    nonce: Option<Nonce<C>>,
     cipher: Option<Ctr128BE<C>>,
 }
 
@@ -31,7 +34,8 @@ where
     C: Clone + BlockEncrypt + BlockCipher<BlockSize = U16> + NewBlockCipher + 'static,
 {
     fn reset(&mut self) {
-        self.cipher = None
+        self.nonce = None;
+        self.cipher = None;
     }
 }
 
@@ -51,6 +55,7 @@ where
             key_size: key_size,
             key: Default::default(),
             salt: Default::default(),
+            nonce: None,
             cipher: None,
         };
 
@@ -164,11 +169,17 @@ where
         self.rtp_nonce(ssrc, index.into(), nonce)
     }
 
-    fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
+    fn add_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 
-    fn encrypt(&self, nonce: &[u8], buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+    fn set_nonce(&mut self, nonce: &[u8]) -> Result<(), Error> {
+        self.nonce = Some(Nonce::<C>::clone_from_slice(nonce));
+        Ok(())
+    }
+
+    fn encrypt(&self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+        let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
         let key = GenericArray::from_slice(self.key());
         Ctr128BE::<C>::new(&key, nonce.into())
             .try_apply_keystream(&mut buf[..pt_size])
@@ -176,8 +187,8 @@ where
             .map_err(|_| Error::CipherFail)
     }
 
-    fn decrypt(&self, nonce: &[u8], buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
-        self.encrypt(nonce, buf, ct_size)
+    fn decrypt(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        self.encrypt(buf, buf.len())
     }
 }
 
@@ -343,14 +354,17 @@ mod tests {
         // Verify correct encryption
         let mut enc_buffer = [0u8; 16];
         enc_buffer[..pt.len()].copy_from_slice(&pt);
-        cipher.set_aad(&aad)?;
-        let ct_size = cipher.encrypt(&nonce, &mut enc_buffer, pt.len())?;
+        cipher.add_aad(&aad)?;
+        cipher.set_nonce(&nonce)?;
+        let ct_size = cipher.encrypt(&mut enc_buffer, pt.len())?;
         assert_eq!(ct_size, ct.len());
         assert_eq!(enc_buffer, ct);
 
         // Verify correct decryption
-        cipher.set_aad(&aad)?;
-        let pt_size = cipher.decrypt(&nonce, &mut enc_buffer, ct.len())?;
+        cipher.reset();
+        cipher.add_aad(&aad)?;
+        cipher.set_nonce(&nonce)?;
+        let pt_size = cipher.decrypt(&mut enc_buffer)?;
         assert_eq!(pt_size, pt.len());
         assert_eq!(&enc_buffer[..pt_size], &pt);
 

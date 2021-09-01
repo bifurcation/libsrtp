@@ -25,7 +25,7 @@ impl Auth for Context {
         Ok(())
     }
 
-    fn compute(&mut self, _message: &[u8], tag: &mut [u8]) -> Result<(), Error> {
+    fn compute(&mut self, tag: &mut [u8]) -> Result<(), Error> {
         if tag.len() > 0 {
             Err(Error::AuthFail)
         } else {

@@ -43,20 +43,25 @@ impl Cipher for Context {
     ) -> Result<usize, Error> {
         Ok(0)
     }
+
     fn rtcp_nonce(&self, _ssrc: u32, _index: u32, _nonce: &mut [u8]) -> Result<usize, Error> {
         Ok(0)
     }
 
-    fn set_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
+    fn add_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 
-    fn encrypt(&self, _nonce: &[u8], _buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+    fn set_nonce(&mut self, _nonce: &[u8]) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn encrypt(&self, _buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         Ok(pt_size)
     }
 
-    fn decrypt(&self, _nonce: &[u8], _buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
-        Ok(ct_size)
+    fn decrypt(&self, _buf: &mut [u8]) -> Result<usize, Error> {
+        Ok(_buf.len())
     }
 }
 

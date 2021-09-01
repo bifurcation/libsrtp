@@ -122,8 +122,9 @@ impl CipherTest {
         enc_buffer[..pt_size].copy_from_slice(self.plaintext);
 
         cipher.reset();
-        cipher.set_aad(self.aad)?;
-        let enc_len = cipher.encrypt(self.nonce, enc_buffer, pt_size)?;
+        cipher.add_aad(self.aad)?;
+        cipher.set_nonce(self.nonce)?;
+        let enc_len = cipher.encrypt(enc_buffer, pt_size)?;
         if enc_len != ct_size {
             return Err(Error::AlgoFail);
         }
@@ -137,8 +138,9 @@ impl CipherTest {
         dec_buffer.copy_from_slice(self.ciphertext);
 
         cipher.reset();
-        cipher.set_aad(self.aad)?;
-        let dec_len = cipher.decrypt(self.nonce, dec_buffer, ct_size)?;
+        cipher.add_aad(self.aad)?;
+        cipher.set_nonce(self.nonce)?;
+        let dec_len = cipher.decrypt(dec_buffer)?;
         if dec_len != pt_size {
             return Err(Error::AlgoFail);
         }
@@ -257,19 +259,12 @@ struct AuthTest {
 impl AuthTest {
     fn run(&self, auth_type: &dyn AuthType) -> Result<(), Error> {
         let mut auth = auth_type.create(self.key, self.tag.len())?;
-        let mut computed_tag = vec![0u8; tag_size(self.id)];
+        let mut tag = vec![0u8; tag_size(self.id)];
 
-        // One step
-        auth.compute(&self.data, computed_tag.as_mut_slice())?;
-        if computed_tag.as_slice() != self.tag {
-            return Err(Error::AlgoFail);
-        }
-
-        // Two step
         auth.start()?;
         auth.update(&self.data)?;
-        auth.compute(&[], computed_tag.as_mut_slice())?;
-        if computed_tag.as_slice() != self.tag {
+        auth.compute(tag.as_mut_slice())?;
+        if tag.as_slice() != self.tag {
             return Err(Error::AlgoFail);
         }
 

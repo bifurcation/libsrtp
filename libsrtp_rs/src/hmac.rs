@@ -45,8 +45,7 @@ impl Auth for HMAC {
         Ok(())
     }
 
-    fn compute(&mut self, message: &[u8], tag: &mut [u8]) -> Result<(), Error> {
-        self.mac.update(message);
+    fn compute(&mut self, tag: &mut [u8]) -> Result<(), Error> {
         let digest = self.mac.finalize_reset().into_bytes();
 
         if tag.len() < self.tag_size {

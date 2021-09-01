@@ -4,27 +4,35 @@ use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 use crate::util::xor_eq;
 use aes_gcm::aead::{generic_array::GenericArray, AeadInPlace, NewAead};
-use aes_gcm::{Aes128Gcm, Aes256Gcm, Key, Nonce};
+use aes_gcm::{AeadCore, Aes128Gcm, Aes256Gcm, Key, Nonce};
 
 #[derive(Clone)]
-struct Context<C> {
+struct Context<C>
+where
+    C: AeadCore,
+{
     key_size: AesKeySize,
     cipher: C,
     salt: [u8; 12],
     aad: [u8; 512],
     aad_size: usize,
+    nonce: Option<Nonce<C::NonceSize>>,
 }
 
-impl<C> Reset for Context<C> {
+impl<C> Reset for Context<C>
+where
+    C: AeadCore,
+{
     fn reset(&mut self) {
         self.aad.fill(0);
         self.aad_size = 0;
+        self.nonce = None;
     }
 }
 
 impl<C> Context<C>
 where
-    C: NewAead,
+    C: AeadCore + NewAead,
 {
     const SALT_SIZE: usize = 12;
     const TAG_SIZE: usize = 16;
@@ -41,6 +49,7 @@ where
             salt: [0; 12],
             aad: [0; 512],
             aad_size: 0,
+            nonce: None,
         };
 
         ctx.salt.copy_from_slice(salt);
@@ -50,7 +59,7 @@ where
 
 impl<C> Cipher for Context<C>
 where
-    C: Clone + AeadInPlace + NewAead + 'static,
+    C: Clone + AeadCore + AeadInPlace + NewAead + 'static,
 {
     fn id(&self) -> CipherTypeID {
         self.key_size.as_gcm_id()
@@ -110,7 +119,7 @@ where
         self.rtp_nonce(ssrc, index.into(), nonce)
     }
 
-    fn set_aad(&mut self, aad: &[u8]) -> Result<(), Error> {
+    fn add_aad(&mut self, aad: &[u8]) -> Result<(), Error> {
         let new_aad_size = self.aad_size + aad.len();
         if new_aad_size > Self::MAX_AAD_SIZE {
             return Err(Error::CipherFail);
@@ -121,13 +130,18 @@ where
         Ok(())
     }
 
-    fn encrypt(&self, nonce: &[u8], buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+    fn set_nonce(&mut self, nonce: &[u8]) -> Result<(), Error> {
+        self.nonce = Some(Nonce::clone_from_slice(&nonce));
+        Ok(())
+    }
+
+    fn encrypt(&self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         let ct_size = pt_size + Self::TAG_SIZE;
         if buf.len() < ct_size {
             return Err(Error::BadParam);
         }
 
-        let nonce = Nonce::from_slice(&nonce);
+        let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
         let aad = &self.aad[..self.aad_size];
         let tag = self
             .cipher
@@ -138,17 +152,18 @@ where
         Ok(ct_size)
     }
 
-    fn decrypt(&self, nonce: &[u8], buf: &mut [u8], ct_size: usize) -> Result<usize, Error> {
+    fn decrypt(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        let ct_size = buf.len();
         if ct_size < Self::TAG_SIZE {
             return Err(Error::BadParam);
         }
 
         let pt_size = ct_size - Self::TAG_SIZE;
         let mut tag = [0u8; 16];
-        tag.copy_from_slice(&buf[pt_size..ct_size]);
+        tag.copy_from_slice(&buf[pt_size..]);
         let tag = GenericArray::from_slice(&tag);
 
-        let nonce = Nonce::from_slice(&nonce);
+        let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
         let aad = &self.aad[..self.aad_size];
 
         self.cipher
@@ -250,15 +265,17 @@ mod tests {
         enc_buffer[..pt.len()].copy_from_slice(&pt);
 
         cipher.reset();
-        cipher.set_aad(&aad)?;
-        let ct_size = cipher.encrypt(&nonce, &mut enc_buffer, pt.len())?;
+        cipher.add_aad(&aad)?;
+        cipher.set_nonce(&nonce)?;
+        let ct_size = cipher.encrypt(&mut enc_buffer, pt.len())?;
         assert_eq!(ct_size, ct.len());
         assert_eq!(enc_buffer, ct);
 
         // Verify correct decryption
         cipher.reset();
-        cipher.set_aad(&aad)?;
-        let pt_size = cipher.decrypt(&nonce, &mut enc_buffer, ct.len())?;
+        cipher.add_aad(&aad)?;
+        cipher.set_nonce(&nonce)?;
+        let pt_size = cipher.decrypt(&mut enc_buffer)?;
         assert_eq!(pt_size, pt.len());
         assert_eq!(&enc_buffer[..pt_size], &pt);
 

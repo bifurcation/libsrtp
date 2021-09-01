@@ -53,14 +53,15 @@ impl KDF {
 
     pub fn generate(&self, label: KdfLabel, buffer: &mut [u8]) -> Result<(), Error> {
         let mut inst = self.cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
-        let op = inst.start();
+        let mut op = inst.start();
 
         let mut nonce = self.salt;
         let label_u8: u8 = label.into();
         nonce[7] ^= label_u8;
+        op.set_nonce(&nonce)?;
 
         buffer.fill(0);
-        op.encrypt(&nonce, buffer, buffer.len())?;
+        op.encrypt(buffer, buffer.len())?;
         Ok(())
     }
 }

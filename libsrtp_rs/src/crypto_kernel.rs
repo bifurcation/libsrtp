@@ -282,19 +282,22 @@ pub trait Cipher: Reset {
     ) -> Result<usize, Error>;
     fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error>;
 
-    // XXX(RLB) I don't love this API, but given that we have the AAD and the plaintext/ciphertext
-    // resident in the same buffer, Rust's memory model doesn't like it when we take two views of
-    // the same buffer, even if they're disjoint.  So to be maximally safe, we eat the cost of a
-    // memcpy and a slightly clunky API.
-    fn set_aad(&mut self, aad: &[u8]) -> Result<(), Error>;
+    // XXX(RLB) It would be cleaner just to have a more modern Seal/Open interface here.  The
+    // incremental interface is here for two reasons:
+    //
+    // * Because AAD for SRTCP is disaggregated, providing AAD incrementally allows us to push the
+    //   cost of disaggregation down the stack, where it can be handled more elegantly.
+    //
+    // * While we provide a C-level crypto interface for interop verification, it is simpler to
+    //   have the incremental API so that we can just pass through calls.
+    //
+    // So even once we tear down the C-level crypto interface scaffolding, we will still have the
+    // disaggregated AAD problem.
+    fn add_aad(&mut self, aad: &[u8]) -> Result<(), Error>;
+    fn set_nonce(&mut self, iv: &[u8]) -> Result<(), Error>;
 
-    fn encrypt(&self, nonce: &[u8], buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
-    fn decrypt(
-        &self,
-        nonce: &[u8],
-        buf: &mut [u8],
-        ct_size: usize, // TODO(RLB) Delete ct_size
-    ) -> Result<usize, Error>;
+    fn encrypt(&self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
+    fn decrypt(&self, buf: &mut [u8]) -> Result<usize, Error>;
 }
 
 impl Reset for Box<dyn Cipher> {
@@ -334,7 +337,7 @@ pub trait Auth: Reset {
     fn prefix_size(&self) -> usize;
     fn start(&mut self) -> Result<(), Error>;
     fn update(&mut self, update: &[u8]) -> Result<(), Error>;
-    fn compute(&mut self, message: &[u8], tag: &mut [u8]) -> Result<(), Error>;
+    fn compute(&mut self, tag: &mut [u8]) -> Result<(), Error>;
 }
 
 impl Reset for Box<dyn Auth> {
