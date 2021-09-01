@@ -46,13 +46,6 @@ pub enum Error {
                      */
 }
 
-#[derive(Clone, PartialEq, Eq)]
-enum Direction {
-    Unknown = 0,
-    Sender = 1,
-    Receiver = 2,
-}
-
 struct CipherFactory<'a> {
     kernel: &'a CryptoKernel,
     kdf: &'a KDF,
@@ -414,13 +407,12 @@ impl SessionKeys {
 
 #[derive(Clone)]
 struct Stream {
-    ssrc: u32,
+    ssrc: Ssrc,
     session_keys: Vec<SessionKeys>,
     rtp_rdbx: ExtendedReplayDB,
     rtcp_rdb: ReplayDB,
     rtp_services: SecurityServices,
     rtcp_services: SecurityServices,
-    direction: Direction,
     allow_repeat_tx: bool,
     xtn_headers_to_encrypt: Vec<ExtensionHeaderId>,
     pending_roc: Option<RolloverCounter>,
@@ -439,13 +431,12 @@ impl Stream {
         }
 
         Ok(Stream {
-            ssrc: policy.ssrc.value,
+            ssrc: policy.ssrc,
             session_keys: session_keys,
             rtp_rdbx: ExtendedReplayDB::new(policy.window_size)?,
             rtcp_rdb: ReplayDB::new(),
             rtp_services: policy.rtp.sec_serv,
             rtcp_services: policy.rtcp.sec_serv,
-            direction: Direction::Unknown,
             allow_repeat_tx: policy.allow_repeat_tx,
             xtn_headers_to_encrypt: policy.xtn_headers_to_encrypt.clone(),
             pending_roc: None,
@@ -459,7 +450,7 @@ impl Stream {
         )
     }
 
-    pub fn clone_for_ssrc(&self, ssrc: u32) -> Result<Self, Error> {
+    pub fn clone_for_ssrc(&self, ssrc: Ssrc) -> Result<Self, Error> {
         let mut stream = self.clone();
 
         // Set the SSRC to the one provided
@@ -473,20 +464,6 @@ impl Stream {
         stream.pending_roc = None;
 
         Ok(stream)
-    }
-
-    fn check_ssrc_collision(&mut self, handler: &EventHandler, direction: Direction) {
-        if self.direction == Direction::Unknown {
-            self.direction = direction;
-            return;
-        }
-
-        if self.direction == direction {
-            return; // OK
-        }
-
-        // Report collision
-        handler.handle(self.ssrc, Event::SsrcCollision);
     }
 
     pub fn get_session_keys(
@@ -533,9 +510,6 @@ impl Stream {
         mki_index: usize,
         event_handler: EventHandler,
     ) -> Result<usize, Error> {
-        // Check that this stream is for sending traffic
-        self.check_ssrc_collision(&event_handler, Direction::Sender);
-
         // Estimate the packet index
         let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
         if advance_index {
@@ -588,9 +562,6 @@ impl Stream {
         use_mki: bool,
         event_handler: EventHandler,
     ) -> Result<usize, Error> {
-        // Check for SSRC collision
-        self.check_ssrc_collision(&event_handler, Direction::Receiver);
-
         // Estimate the sequence number
         let (index, delta, advance_index) = self.estimate_packet_index(pkt.header.seq)?;
         self.rtp_rdbx.check(delta)?;
@@ -641,9 +612,6 @@ impl Stream {
         mki_index: usize,
         event_handler: EventHandler,
     ) -> Result<usize, Error> {
-        // Check that this stream is for sending traffic
-        self.check_ssrc_collision(&event_handler, Direction::Sender);
-
         // Calculate the packet index
         let index = self.rtcp_rdb.increment()?;
 
@@ -685,9 +653,6 @@ impl Stream {
         use_mki: bool,
         event_handler: EventHandler,
     ) -> Result<usize, Error> {
-        // Check for SSRC collision
-        self.check_ssrc_collision(&event_handler, Direction::Receiver);
-
         // Determine which session keys should be used
         let sk = if use_mki {
             pkt.find_mki(&mut self.session_keys).ok_or(Error::BadMki)?
@@ -744,7 +709,7 @@ pub enum Event {
 // * Provide UserData in EventData
 // * Refactor Context to hold RefCell<Stream> instead of Stream
 pub struct EventData {
-    pub ssrc: u32,
+    pub ssrc: Ssrc,
     pub event: Event,
 }
 
@@ -764,7 +729,7 @@ impl EventHandler {
         self.handle_fn = None;
     }
 
-    fn handle(&self, ssrc: u32, event: Event) {
+    fn handle(&self, ssrc: Ssrc, event: Event) {
         self.handle_fn.map(|f| {
             f(&EventData {
                 ssrc: ssrc,
@@ -808,13 +773,13 @@ impl Context {
     pub fn add_stream(&mut self, kernel: &CryptoKernel, policy: &Policy) -> Result<(), Error> {
         let stream = Stream::new(kernel, policy)?;
 
-        match policy.ssrc.type_ {
-            SsrcType::Specific => {
+        match policy.ssrc {
+            Ssrc::Inbound(_) | Ssrc::Outbound(_) | Ssrc::Any(_) => {
                 // SSRC-specific streams are added to the stream list
                 self.streams.push(stream);
                 Ok(())
             }
-            SsrcType::Inbound | SsrcType::Outbound => {
+            Ssrc::AnyInbound | Ssrc::AnyOutbound => {
                 // A wildcard inbound or outbound policy sets the stream template.  If the template
                 // is already set, then the policy set is inconsistent.
                 if let Some(_) = self.stream_template {
@@ -824,20 +789,22 @@ impl Context {
                 self.stream_template = Some(stream);
                 Ok(())
             }
-            _ => Err(Error::BadParam),
         }
     }
 
-    fn get_stream(&self, ssrc: u32) -> Option<usize> {
+    fn get_stream(&mut self, ssrc: Ssrc) -> Option<usize> {
         for i in 0..self.streams.len() {
-            if self.streams[i].ssrc == ssrc {
+            if self.streams[i].ssrc.equal_or_generic(ssrc) {
+                // XXX(RLB) If we don't need Any, we can use `==` above, remove this line, and
+                // remove the &mut from the `self` reference.
+                self.streams[i].ssrc = ssrc;
                 return Some(i);
             }
         }
         None
     }
 
-    pub fn remove_stream(&mut self, ssrc: u32) -> Result<(), Error> {
+    pub fn remove_stream(&mut self, ssrc: Ssrc) -> Result<(), Error> {
         match self.get_stream(ssrc) {
             Some(i) => {
                 self.streams.remove(i);
@@ -855,10 +822,11 @@ impl Context {
     }
 
     pub fn update_stream(&mut self, kernel: &CryptoKernel, policy: &Policy) -> Result<(), Error> {
-        match policy.ssrc.type_ {
-            SsrcType::Specific => self.update_specific_stream(kernel, policy),
-            SsrcType::Inbound | SsrcType::Outbound => self.update_template_streams(kernel, policy),
-            _ => Err(Error::BadParam),
+        match policy.ssrc {
+            Ssrc::Inbound(_) | Ssrc::Outbound(_) | Ssrc::Any(_) => {
+                self.update_specific_stream(kernel, policy)
+            }
+            Ssrc::AnyInbound | Ssrc::AnyOutbound => self.update_template_streams(kernel, policy),
         }
     }
 
@@ -867,7 +835,7 @@ impl Context {
         kernel: &CryptoKernel,
         policy: &Policy,
     ) -> Result<(), Error> {
-        let ssrc = policy.ssrc.value;
+        let ssrc = policy.ssrc;
         let stream_index = self.get_stream(ssrc).ok_or(Error::BadParam)?;
 
         // Save the old extended seq
@@ -889,12 +857,9 @@ impl Context {
         Ok(())
     }
 
-    fn make_stream(&self, ssrc: u32, direction: Direction) -> Result<Stream, Error> {
+    fn make_stream(&self, ssrc: Ssrc) -> Result<Stream, Error> {
         let stream_template = self.stream_template.as_ref().ok_or(Error::NoContext)?;
-        let mut stream = stream_template.clone();
-        stream.ssrc = ssrc;
-        stream.direction = direction;
-        Ok(stream)
+        Ok(stream_template.clone_for_ssrc(ssrc)?)
     }
 
     pub fn update_template_streams(
@@ -951,7 +916,7 @@ impl Context {
         let mut pkt = SrtpPacket::new(pkt_data, pkt_len)?;
 
         // Find or create the correct stream
-        let ssrc = pkt.header.ssrc;
+        let ssrc = Ssrc::Outbound(pkt.header.ssrc);
         let stream_index = match self.get_stream(ssrc) {
             Some(x) => x,
             None => {
@@ -959,7 +924,7 @@ impl Context {
                     return Err(Error::NoContext);
                 }
 
-                let stream = self.make_stream(ssrc, Direction::Sender)?;
+                let stream = self.make_stream(ssrc)?;
                 self.streams.push(stream);
                 self.streams.len() - 1
             }
@@ -982,11 +947,11 @@ impl Context {
         let mut pkt = SrtpPacket::new(pkt_data, pkt_data.len())?;
 
         // Get or create the stream
-        let ssrc = pkt.header.ssrc;
+        let ssrc = Ssrc::Inbound(pkt.header.ssrc);
         let stream_index = self.get_stream(ssrc);
         let mut new_stream = match stream_index {
             Some(_) => None,
-            None => Some(self.make_stream(ssrc, Direction::Receiver)?),
+            None => Some(self.make_stream(ssrc)?),
         };
         let stream = match stream_index {
             Some(i) => &mut self.streams[i],
@@ -1018,7 +983,7 @@ impl Context {
         let mut pkt = SrtcpPacket::new(pkt_data, pkt_len)?;
 
         // Find or create the correct stream
-        let ssrc = pkt.header.ssrc;
+        let ssrc = Ssrc::Outbound(pkt.header.ssrc);
         let stream_index = match self.get_stream(ssrc) {
             Some(x) => x,
             None => {
@@ -1026,7 +991,7 @@ impl Context {
                     return Err(Error::NoContext);
                 }
 
-                let stream = self.make_stream(ssrc, Direction::Sender)?;
+                let stream = self.make_stream(ssrc)?;
                 self.streams.push(stream);
                 self.streams.len() - 1
             }
@@ -1049,11 +1014,11 @@ impl Context {
         let mut pkt = SrtcpPacket::new(pkt_data, pkt_data.len())?;
 
         // Get or create the stream
-        let ssrc = pkt.header.ssrc;
+        let ssrc = Ssrc::Inbound(pkt.header.ssrc);
         let stream_index = self.get_stream(ssrc);
         let mut new_stream = match stream_index {
             Some(_) => None,
-            None => Some(self.make_stream(ssrc, Direction::Receiver)?),
+            None => Some(self.make_stream(ssrc)?),
         };
         let stream = match stream_index {
             Some(i) => &mut self.streams[i],
@@ -1150,10 +1115,7 @@ mod test {
 
         fn validate(&self) -> Result<(), Error> {
             let mut policy = Policy {
-                ssrc: Ssrc {
-                    type_: SsrcType::Outbound,
-                    value: 0,
-                },
+                ssrc: Ssrc::AnyOutbound,
                 rtp: SHORT_AUTH_KEY_POLICY,
                 rtcp: SHORT_AUTH_KEY_POLICY,
                 keys: vec![MasterKey {
@@ -1293,10 +1255,7 @@ mod test {
 
         fn validate(&self) -> Result<(), Error> {
             let mut policy = Policy {
-                ssrc: Ssrc {
-                    type_: SsrcType::Outbound,
-                    value: 0,
-                },
+                ssrc: Ssrc::AnyOutbound,
                 rtp: SHORT_AUTH_KEY_POLICY,
                 rtcp: SHORT_AUTH_KEY_POLICY,
                 keys: vec![MasterKey {

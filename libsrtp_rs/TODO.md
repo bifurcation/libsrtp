@@ -11,7 +11,7 @@ TODO
 * [X] Event handler
 * [X] Use `Rc<T>` instead of `Box<T>` for crypto objects
 * [X] SRTP and SRTCP validation
-* [ ] Convert all hex literals to use `hex!()`
+* [X] Convert all hex literals to use `hex!()`
 * [ ] Replicate all C tests in Rust
 * [ ] Debug logging
 * [ ] Short-tag GCM modes
@@ -24,5 +24,5 @@ TODO
 * [ ] Crypto library agility (and integration into CMake)
 * [ ] OpenSSL support
 * [ ] mBedTLS support
-* [ ] Instead of SsrcType, make Ssrc an enum
+* [X] Instead of SsrcType, make Ssrc an enum
 

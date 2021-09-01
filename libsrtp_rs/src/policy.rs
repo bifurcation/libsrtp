@@ -1,4 +1,5 @@
 use crate::crypto_kernel::*;
+use crate::srtp::Error;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -217,19 +218,42 @@ impl CryptoPolicy {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub enum SsrcType {
-    Undefined = 0,
-    Specific = 1,
-    Inbound = 2,
-    Outbound = 3,
+#[derive(Copy, Clone)]
+pub enum Ssrc {
+    AnyInbound,
+    AnyOutbound,
+    Inbound(u32),
+    Outbound(u32),
+
+    // XXX(RLB) This case exists to cover the current usage, where the direction of a specific SSRC
+    // isn't known until it used for the first time.  If we constrain applications to always
+    // specify whether a given SSRC is inbound or outbound, we can delete this case.
+    Any(u32),
 }
 
-#[derive(Copy, Clone)]
-pub struct Ssrc {
-    pub type_: SsrcType,
-    pub value: u32,
+impl Ssrc {
+    pub fn equal_or_generic(&self, other: Ssrc) -> bool {
+        match (*self, other) {
+            // Inbound(a) matches Inbound(a) or Any(a)
+            (Ssrc::Any(a), Ssrc::Inbound(b)) => (a == b),
+            (Ssrc::Inbound(a), Ssrc::Inbound(b)) => (a == b),
+
+            // Outbound(a) matches Outbound(a) or Any(a)
+            (Ssrc::Any(a), Ssrc::Outbound(b)) => (a == b),
+            (Ssrc::Outbound(a), Ssrc::Outbound(b)) => (a == b),
+
+            _ => false,
+        }
+    }
+
+    pub fn value(&self) -> Result<u32, Error> {
+        match self {
+            Ssrc::Inbound(ssrc) => Ok(*ssrc),
+            Ssrc::Outbound(ssrc) => Ok(*ssrc),
+            Ssrc::Any(ssrc) => Ok(*ssrc),
+            _ => Err(Error::BadParam),
+        }
+    }
 }
 
 #[derive(Clone)]
