@@ -311,6 +311,7 @@ pub type CipherInstance = Rc<RefCell<Instance<Box<dyn Cipher>>>>;
 pub trait CipherType {
     fn id(&self) -> CipherTypeID;
     fn create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn Cipher>, Error>;
+    fn clone(&self) -> Box<dyn CipherType>;
 }
 
 //
@@ -363,6 +364,7 @@ impl TagSize for AuthInstance {
 pub trait AuthType {
     fn id(&self) -> AuthTypeID;
     fn create(&self, key: &[u8], tag_size: usize) -> Result<Box<dyn Auth>, Error>;
+    fn clone(&self) -> Box<dyn AuthType>;
 }
 
 //
@@ -451,6 +453,18 @@ impl CryptoKernel {
         let auth_type = self.auth_types.get(&id).ok_or(Error::Fail)?;
         let auth = auth_type.create(key, tag_size)?;
         Ok(Instance::new(auth))
+    }
+
+    // XXX(RLB) Only needed to support C interface
+    pub fn cipher_type(&self, id: CipherTypeID) -> Result<Box<dyn CipherType>, Error> {
+        let cipher_type = self.cipher_types.get(&id).ok_or(Error::Fail)?;
+        Ok(cipher_type.deref().clone())
+    }
+
+    // XXX(RLB) Only needed to support C interface
+    pub fn auth_type(&self, id: AuthTypeID) -> Result<Box<dyn AuthType>, Error> {
+        let auth_type = self.auth_types.get(&id).ok_or(Error::Fail)?;
+        Ok(auth_type.deref().clone())
     }
 }
 

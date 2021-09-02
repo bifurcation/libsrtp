@@ -25,7 +25,7 @@ pub extern "C" fn srtp_sha1_update(ctx: *mut Sha1, msg_ptr: *const u8, octets_in
 pub extern "C" fn srtp_sha1_final(ctx: *mut Sha1, output_ptr: *mut u32) {
     unsafe {
         let output_u8 = output_ptr as *mut u8;
-        let mut output_slice = slice::from_raw_parts_mut(output_u8, 20);
+        let output_slice = slice::from_raw_parts_mut(output_u8, 20);
         let h = ctx.as_mut().unwrap();
 
         let digest = h.finalize_reset();

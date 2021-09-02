@@ -48,6 +48,10 @@ impl AuthType for NullAuth {
 
         Ok(Box::new(Context))
     }
+
+    fn clone(&self) -> Box<dyn AuthType> {
+        Box::new(NullAuth)
+    }
 }
 
 #[cfg(test)]

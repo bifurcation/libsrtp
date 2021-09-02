@@ -85,6 +85,10 @@ impl CipherType for NullCipher {
     fn create(&self, _key: &[u8], _salt: &[u8]) -> Result<Box<dyn Cipher>, Error> {
         Ok(Box::new(Context {}))
     }
+
+    fn clone(&self) -> Box<dyn CipherType> {
+        Box::new(NullCipher)
+    }
 }
 
 #[cfg(test)]

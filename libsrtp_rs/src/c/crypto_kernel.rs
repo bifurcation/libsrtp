@@ -26,7 +26,7 @@ pub extern "C" fn srtp_crypto_kernel_init() -> Error {
     }
 
     // Initialize the kernel
-    let mut kernel = match CryptoKernel::default() {
+    let kernel = match CryptoKernel::default() {
         Ok(x) => x,
         Err(err) => return err,
     };
@@ -53,28 +53,20 @@ pub extern "C" fn srtp_crypto_kernel_status() -> Error {
 pub extern "C" fn srtp_crypto_kernel_alloc_cipher(
     id: CipherTypeID,
     cp: *mut *mut srtp_cipher_t,
-    key_len: c_int,
-    tag_len: c_int,
+    _key_len: c_int,
+    _tag_len: c_int,
 ) -> Error {
     if let None = unsafe { &singleton_kernel } {
         return Error::InitFail;
     }
 
-    let cipher_result = unsafe {
-        singleton_kernel
-            .as_ref()
-            .unwrap()
-            .cipher(id, key_len as usize, tag_len as usize)
-    };
-
-    let cipher = match cipher_result {
+    let cipher_type = match unsafe { singleton_kernel.as_ref().unwrap().cipher_type(id) } {
         Ok(x) => x,
         Err(err) => return err,
     };
 
-    let srtp_cipher = make_cipher_t(id, cipher);
-
-    let cipher_ptr = Box::into_raw(Box::new(srtp_cipher));
+    let cipher = make_cipher_t(cipher_type);
+    let cipher_ptr = Box::into_raw(Box::new(cipher));
     unsafe { cp.write(cipher_ptr) };
     Error::Ok
 }
@@ -83,28 +75,20 @@ pub extern "C" fn srtp_crypto_kernel_alloc_cipher(
 pub extern "C" fn srtp_crypto_kernel_alloc_auth(
     id: AuthTypeID,
     ap: *mut *mut srtp_auth_t,
-    key_len: c_int,
+    _key_len: c_int,
     tag_len: c_int,
 ) -> Error {
     if let None = unsafe { &singleton_kernel } {
         return Error::InitFail;
     }
 
-    let auth_result = unsafe {
-        singleton_kernel
-            .as_ref()
-            .unwrap()
-            .auth(id, key_len as usize, tag_len as usize)
-    };
-
-    let auth = match auth_result {
+    let auth_type = match unsafe { singleton_kernel.as_ref().unwrap().auth_type(id) } {
         Ok(x) => x,
         Err(err) => return err,
     };
 
-    let srtp_auth = make_auth_t(id, auth);
-
-    let auth_ptr = Box::into_raw(Box::new(srtp_auth));
+    let auth = make_auth_t(auth_type, tag_len);
+    let auth_ptr = Box::into_raw(Box::new(auth));
     unsafe { ap.write(auth_ptr) };
     Error::Ok
 }

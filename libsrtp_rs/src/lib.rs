@@ -15,6 +15,4 @@ pub mod srtp;
 mod util;
 
 // C-facing interfaces
-// XXX(RLB) Disabled for now, since the crypto interfaces have diverged so that they can be more
-// modern and idiomatic
-// mod c;
+mod c;

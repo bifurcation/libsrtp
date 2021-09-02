@@ -228,6 +228,12 @@ impl CipherType for NativeAesIcm {
             AesKeySize::Aes256 => Box::new(Context::<Aes256>::new(self.key_size, key, salt)?),
         })
     }
+
+    fn clone(&self) -> Box<dyn CipherType> {
+        Box::new(NativeAesIcm {
+            key_size: self.key_size,
+        })
+    }
 }
 
 #[cfg(test)]

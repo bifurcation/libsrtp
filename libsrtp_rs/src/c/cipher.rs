@@ -7,38 +7,38 @@ use crate::aes_icm::NativeAesIcm;
 use crate::c::err::srtp_debug_module_t;
 use crate::c::{just_error, zero_and_drop};
 use crate::crypto_kernel::constants::AesKeySize;
-use crate::crypto_kernel::{Cipher, CipherDirection, CipherType, CipherTypeID};
+use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
 use crate::null_cipher::NullCipher;
 use crate::srtp::Error;
 use cpu_time::ThreadTime;
 use cstr::cstr;
 use rand::RngCore;
-use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_uint};
 
-//
-// Types
-//
+pub struct SrtpCipherState {
+    cipher_type: Box<dyn CipherType>,
+    cipher: Option<Box<dyn Cipher>>,
+}
+
 pub type srtp_cipher_type_id_t = u32;
 
 pub type srtp_cipher_direction_t = c_uint;
-pub type srtp_cipher_pointer_t = *mut srtp_cipher_t;
 
 pub type srtp_cipher_alloc_func_t =
-    Option<extern "C" fn(cp: *mut srtp_cipher_pointer_t, key_len: c_int, tag_len: c_int) -> Error>;
+    Option<extern "C" fn(cp: *mut *mut srtp_cipher_t, key_len: c_int, tag_len: c_int) -> Error>;
 
-pub type srtp_cipher_dealloc_func_t = Option<extern "C" fn(cp: srtp_cipher_pointer_t) -> Error>;
+pub type srtp_cipher_dealloc_func_t = Option<extern "C" fn(cp: *mut srtp_cipher_t) -> Error>;
 
 pub type srtp_cipher_init_func_t =
-    Option<extern "C" fn(state: *mut Box<dyn Cipher>, key: *const u8) -> Error>;
+    Option<extern "C" fn(state: *mut SrtpCipherState, key: *const u8) -> Error>;
 
 pub type srtp_cipher_set_aad_func_t =
-    Option<extern "C" fn(state: *mut Box<dyn Cipher>, aad: *const u8, aad_len: u32) -> Error>;
+    Option<extern "C" fn(state: *mut SrtpCipherState, aad: *const u8, aad_len: u32) -> Error>;
 
 pub type srtp_cipher_encrypt_func_t = Option<
     extern "C" fn(
-        state: *mut Box<dyn Cipher>,
+        state: *mut SrtpCipherState,
         buffer: *mut u8,
         octets_to_encrypt: *mut c_uint,
     ) -> Error,
@@ -46,7 +46,7 @@ pub type srtp_cipher_encrypt_func_t = Option<
 
 pub type srtp_cipher_decrypt_func_t = Option<
     extern "C" fn(
-        state: *mut Box<dyn Cipher>,
+        state: *mut SrtpCipherState,
         buffer: *mut u8,
         octets_to_decrypt: *mut c_uint,
     ) -> Error,
@@ -54,14 +54,14 @@ pub type srtp_cipher_decrypt_func_t = Option<
 
 pub type srtp_cipher_set_iv_func_t = Option<
     extern "C" fn(
-        state: *mut Box<dyn Cipher>,
+        state: *mut SrtpCipherState,
         iv: *mut u8,
         direction: srtp_cipher_direction_t,
     ) -> Error,
 >;
 
 pub type srtp_cipher_get_tag_func_t =
-    Option<unsafe extern "C" fn(state: *mut Box<dyn Cipher>, tag: *mut u8, len: *mut u32) -> Error>;
+    Option<unsafe extern "C" fn(state: *mut SrtpCipherState, tag: *mut u8, len: *mut u32) -> Error>;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -103,14 +103,14 @@ unsafe impl Sync for srtp_cipher_type_t {}
 #[derive(Debug)]
 pub struct srtp_cipher_t {
     pub type_: *const srtp_cipher_type_t,
-    pub state: *mut Box<dyn Cipher>,
+    pub state: *mut SrtpCipherState,
     pub key_len: c_int,
     pub algorithm: c_int,
 }
 
 impl Drop for srtp_cipher_t {
     fn drop(&mut self) {
-        // Take ownership of the Box<dyn Cipher> so that it gets dropped
+        // Take ownership of the SrtpCipherState so that it gets dropped
         let _ = unsafe { self.state.read() };
         self.state = std::ptr::null_mut();
     }
@@ -133,49 +133,65 @@ pub static srtp_mod_cipher: srtp_debug_module_t = srtp_debug_module_t {
 //
 
 fn cipher_alloc(
-    cipher_type: &dyn CipherType,
+    cipher_type: Box<dyn CipherType>,
     srtp_cipher_type: *const srtp_cipher_type_t,
-    cp: *mut srtp_cipher_pointer_t,
+    cp: *mut *mut srtp_cipher_t,
     key_len: c_int,
-    tag_len: c_int,
+    _tag_len: c_int,
 ) -> Error {
-    let cipher = match cipher_type.create(key_len as usize, tag_len as usize) {
-        Ok(x) => Box::new(x),
-        Err(err) => return err,
-    };
+    let id = cipher_type.id();
+    let state = Box::new(SrtpCipherState {
+        cipher_type: cipher_type,
+        cipher: None,
+    });
 
     let srtp_cipher = Box::new(srtp_cipher_t {
         type_: srtp_cipher_type,
-        state: Box::into_raw(cipher),
+        state: Box::into_raw(state),
         key_len: key_len,
-        algorithm: CipherTypeID::Null as c_int,
+        algorithm: id as c_int,
     });
     unsafe { cp.write(Box::into_raw(srtp_cipher)) };
     Error::Ok
 }
 
-extern "C" fn cipher_init(state: *mut Box<dyn Cipher>, key: *const u8) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap() };
-    let key_slice = unsafe { std::slice::from_raw_parts(key, cipher.key_size()) };
-    just_error(cipher.init(key_slice))
+extern "C" fn cipher_init(state: *mut SrtpCipherState, key_ptr: *const u8) -> Error {
+    let state = unsafe { state.as_mut().unwrap() };
+    let key_size = state.cipher_type.id().key_size();
+    let key_size_w_salt = key_size + state.cipher_type.id().salt_size();
+    let key_with_salt = unsafe { std::slice::from_raw_parts(key_ptr, key_size_w_salt) };
+    let key = &key_with_salt[..key_size];
+    let salt = &key_with_salt[key_size..];
+
+    match state.cipher_type.create(key, salt) {
+        Err(err) => err,
+        Ok(cipher) => {
+            state.cipher = Some(cipher);
+            Error::Ok
+        }
+    }
 }
 
-extern "C" fn cipher_set_aad(state: *mut Box<dyn Cipher>, aad: *const u8, aad_len: u32) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap() };
-    let aad_slice = unsafe { std::slice::from_raw_parts(aad, aad_len as usize) };
-    just_error(cipher.set_aad(aad_slice))
+extern "C" fn cipher_set_aad(
+    state: *mut SrtpCipherState,
+    aad_ptr: *const u8,
+    aad_len: u32,
+) -> Error {
+    let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
+    let aad = unsafe { std::slice::from_raw_parts(aad_ptr, aad_len as usize) };
+    just_error(cipher.add_aad(aad))
 }
 
 extern "C" fn cipher_encrypt(
-    state: *mut Box<dyn Cipher>,
-    buffer: *mut u8,
+    state: *mut SrtpCipherState,
+    buf_ptr: *mut u8,
     octets_to_encrypt: *mut c_uint,
 ) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap() };
+    let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
     let buf_size = unsafe { octets_to_encrypt.read() as usize };
-    let buf_slice = unsafe { std::slice::from_raw_parts_mut(buffer, buf_size) };
+    let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr, buf_size) };
 
-    match cipher.encrypt(buf_slice, buf_size) {
+    match cipher.encrypt(buf, buf_size) {
         Ok(len) => {
             unsafe { octets_to_encrypt.write(len as c_uint) };
             Error::Ok
@@ -185,15 +201,15 @@ extern "C" fn cipher_encrypt(
 }
 
 extern "C" fn cipher_decrypt(
-    state: *mut Box<dyn Cipher>,
-    buffer: *mut u8,
+    state: *mut SrtpCipherState,
+    buf_ptr: *mut u8,
     octets_to_decrypt: *mut c_uint,
 ) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap() };
+    let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
     let buf_size = unsafe { octets_to_decrypt.read() as usize };
-    let buf_slice = unsafe { std::slice::from_raw_parts_mut(buffer, buf_size) };
+    let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr, buf_size) };
 
-    match cipher.decrypt(buf_slice, buf_size) {
+    match cipher.decrypt(buf) {
         Ok(len) => {
             unsafe { octets_to_decrypt.write(len as c_uint) };
             Error::Ok
@@ -203,20 +219,17 @@ extern "C" fn cipher_decrypt(
 }
 
 extern "C" fn cipher_set_iv(
-    state: *mut Box<dyn Cipher>,
-    iv: *mut u8,
-    direction: srtp_cipher_direction_t,
+    state: *mut SrtpCipherState,
+    iv_ptr: *mut u8,
+    _direction: srtp_cipher_direction_t,
 ) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap() };
-    let iv_slice = unsafe { std::slice::from_raw_parts(iv, cipher.iv_size()) };
-    let dir = match CipherDirection::try_from(direction) {
-        Ok(x) => x,
-        Err(_err) => return Error::BadParam,
-    };
-    just_error(cipher.set_iv(iv_slice, dir))
+    let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
+    let iv = unsafe { std::slice::from_raw_parts(iv_ptr, cipher.id().nonce_size()) };
+    cipher.reset(); // XXX(RLB) This seems to be an implicit assumption of the C code
+    just_error(cipher.set_nonce(iv))
 }
 
-extern "C" fn cipher_get_tag(state: *mut Box<dyn Cipher>, tag: *mut u8, len: *mut u32) -> Error {
+extern "C" fn cipher_get_tag(_state: *mut SrtpCipherState, _tag: *mut u8, _len: *mut u32) -> Error {
     Error::Ok
 }
 
@@ -224,9 +237,9 @@ extern "C" fn cipher_get_tag(state: *mut Box<dyn Cipher>, tag: *mut u8, len: *mu
 // Null Cipher implementation
 //
 
-extern "C" fn null_alloc(cp: *mut srtp_cipher_pointer_t, key_len: c_int, tag_len: c_int) -> Error {
-    let cipher_type = NullCipher {};
-    cipher_alloc(&cipher_type, &srtp_null_cipher, cp, key_len, tag_len)
+extern "C" fn null_alloc(cp: *mut *mut srtp_cipher_t, key_len: c_int, tag_len: c_int) -> Error {
+    let cipher_type = Box::new(NullCipher);
+    cipher_alloc(cipher_type, &srtp_null_cipher, cp, key_len, tag_len)
 }
 
 static srtp_null_cipher_test_case: srtp_cipher_test_case_t = srtp_cipher_test_case_t {
@@ -265,12 +278,12 @@ pub static srtp_null_cipher: srtp_cipher_type_t = srtp_cipher_type_t {
 //
 
 extern "C" fn aes_icm_128_alloc(
-    cp: *mut srtp_cipher_pointer_t,
+    cp: *mut *mut srtp_cipher_t,
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = NativeAesIcm::new(AesKeySize::Aes128);
-    cipher_alloc(&cipher_type, &srtp_aes_icm_128, cp, key_len, tag_len)
+    let cipher_type = Box::new(NativeAesIcm::new(AesKeySize::Aes128));
+    cipher_alloc(cipher_type, &srtp_aes_icm_128, cp, key_len, tag_len)
 }
 
 static srtp_aes_icm_128_key: [u8; 30] = [
@@ -336,12 +349,12 @@ pub static srtp_mod_aes_icm: srtp_debug_module_t = srtp_debug_module_t {
 //
 
 extern "C" fn aes_icm_256_alloc(
-    cp: *mut srtp_cipher_pointer_t,
+    cp: *mut *mut srtp_cipher_t,
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = NativeAesIcm::new(AesKeySize::Aes256);
-    cipher_alloc(&cipher_type, &srtp_aes_icm_256, cp, key_len, tag_len)
+    let cipher_type = Box::new(NativeAesIcm::new(AesKeySize::Aes256));
+    cipher_alloc(cipher_type, &srtp_aes_icm_256, cp, key_len, tag_len)
 }
 
 static srtp_aes_icm_256_key: [u8; 46] = [
@@ -431,8 +444,7 @@ pub extern "C" fn srtp_cipher_bits_per_second(
     for i in 0..(num_trials as u32) {
         nonce[12..].copy_from_slice(&i.to_be_bytes());
 
-        let direction: u32 = CipherDirection::Encrypt.into();
-        let err = srtp_cipher_set_iv(c, nonce.as_mut_ptr(), direction as i32);
+        let err = srtp_cipher_set_iv(c, nonce.as_mut_ptr(), 0);
         if err != Error::Ok {
             return 0;
         }
@@ -563,14 +575,20 @@ static srtp_aes_icm_192_description: &CStr = cstr!("aes icm 192");
 static srtp_aes_gcm_128_description: &CStr = cstr!("aes gcm 128");
 static srtp_aes_gcm_256_description: &CStr = cstr!("aes gcm 256");
 
-pub fn make_cipher_t(id: CipherTypeID, c: Box<dyn Cipher>) -> srtp_cipher_t {
-    let description = match id {
+pub fn make_cipher_t(ct: Box<dyn CipherType>) -> srtp_cipher_t {
+    let description = match ct.id() {
         CipherTypeID::Null => srtp_null_cipher_description.as_ptr(),
         CipherTypeID::AesIcm128 => srtp_aes_icm_128_description.as_ptr(),
         CipherTypeID::AesIcm192 => srtp_aes_icm_192_description.as_ptr(),
         CipherTypeID::AesIcm256 => srtp_aes_icm_256_description.as_ptr(),
         CipherTypeID::AesGcm128 => srtp_aes_gcm_128_description.as_ptr(),
         CipherTypeID::AesGcm256 => srtp_aes_gcm_256_description.as_ptr(),
+    };
+
+    let id = ct.id();
+    let state = SrtpCipherState {
+        cipher_type: ct,
+        cipher: None,
     };
 
     let cipher_type = Box::new(srtp_cipher_type_t {
@@ -587,11 +605,10 @@ pub fn make_cipher_t(id: CipherTypeID, c: Box<dyn Cipher>) -> srtp_cipher_t {
         id: id as srtp_cipher_type_id_t,
     });
 
-    let key_size = c.key_size() as c_int;
     srtp_cipher_t {
         type_: Box::into_raw(cipher_type),
-        state: Box::into_raw(Box::new(c)),
-        key_len: key_size,
+        state: Box::into_raw(Box::new(state)),
+        key_len: id.key_size() as c_int,
         algorithm: id as c_int,
     }
 }

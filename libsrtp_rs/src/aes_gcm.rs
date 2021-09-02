@@ -208,6 +208,12 @@ impl CipherType for NativeAesGcm {
             )?)),
         }
     }
+
+    fn clone(&self) -> Box<dyn CipherType> {
+        Box::new(NativeAesGcm {
+            key_size: self.key_size,
+        })
+    }
 }
 
 #[cfg(test)]

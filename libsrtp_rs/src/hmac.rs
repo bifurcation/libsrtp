@@ -67,6 +67,10 @@ impl AuthType for NativeHMAC {
     fn create(&self, key: &[u8], tag_size: usize) -> Result<Box<dyn Auth>, Error> {
         Ok(Box::new(HMAC::new(key, tag_size)?))
     }
+
+    fn clone(&self) -> Box<dyn AuthType> {
+        Box::new(NativeHMAC)
+    }
 }
 
 #[cfg(test)]

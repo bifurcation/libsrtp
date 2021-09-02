@@ -10,24 +10,29 @@ use crate::hmac::NativeHMAC;
 use crate::null_auth::NullAuth;
 use crate::srtp::Error;
 use cstr::cstr;
+use hex_literal::hex;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 
+pub struct SrtpAuthState {
+    auth_type: Box<dyn AuthType>,
+    tag_size: usize,
+    auth: Option<Box<dyn Auth>>,
+}
+
 pub type srtp_auth_type_id_t = c_int;
 
-pub type srtp_auth_pointer_t = *mut srtp_auth_t;
-
 pub type srtp_auth_alloc_func =
-    Option<extern "C" fn(ap: *mut srtp_auth_pointer_t, key_len: c_int, out_len: c_int) -> Error>;
+    Option<extern "C" fn(ap: *mut *mut srtp_auth_t, key_len: c_int, out_len: c_int) -> Error>;
 
-pub type srtp_auth_dealloc_func = Option<extern "C" fn(ap: srtp_auth_pointer_t) -> Error>;
+pub type srtp_auth_dealloc_func = Option<extern "C" fn(ap: *mut srtp_auth_t) -> Error>;
 
 pub type srtp_auth_init_func =
-    Option<extern "C" fn(state: *mut Box<dyn Auth>, key: *const u8, key_len: c_int) -> Error>;
+    Option<extern "C" fn(state: *mut SrtpAuthState, key: *const u8, key_len: c_int) -> Error>;
 
 pub type srtp_auth_compute_func = Option<
     extern "C" fn(
-        state: *mut Box<dyn Auth>,
+        state: *mut SrtpAuthState,
         buffer: *const u8,
         octets_to_auth: c_int,
         tag_len: c_int,
@@ -36,10 +41,10 @@ pub type srtp_auth_compute_func = Option<
 >;
 
 pub type srtp_auth_update_func = Option<
-    extern "C" fn(state: *mut Box<dyn Auth>, buffer: *const u8, octets_to_auth: c_int) -> Error,
+    extern "C" fn(state: *mut SrtpAuthState, buffer: *const u8, octets_to_auth: c_int) -> Error,
 >;
 
-pub type srtp_auth_start_func = Option<extern "C" fn(state: *mut Box<dyn Auth>) -> Error>;
+pub type srtp_auth_start_func = Option<extern "C" fn(state: *mut SrtpAuthState) -> Error>;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -75,7 +80,7 @@ unsafe impl Sync for srtp_auth_type_t {}
 #[derive(Debug)]
 pub struct srtp_auth_t {
     pub type_: *const srtp_auth_type_t,
-    pub state: *mut Box<dyn Auth>,
+    pub state: *mut SrtpAuthState,
     pub out_len: c_int,
     pub key_len: c_int,
     pub prefix_len: c_int,
@@ -107,21 +112,22 @@ pub static srtp_mod_auth: srtp_debug_module_t = srtp_debug_module_t {
 //
 
 fn auth_alloc(
-    auth_type: &dyn AuthType,
+    auth_type: Box<dyn AuthType>,
     srtp_auth_type: *const srtp_auth_type_t,
-    ap: *mut srtp_auth_pointer_t,
+    ap: *mut *mut srtp_auth_t,
     key_len: c_int,
     out_len: c_int,
     prefix_len: c_int,
 ) -> Error {
-    let auth = match auth_type.create(key_len as usize, out_len as usize) {
-        Ok(x) => Box::new(x),
-        Err(err) => return err,
-    };
+    let state = Box::new(SrtpAuthState {
+        auth_type: auth_type,
+        tag_size: out_len as usize,
+        auth: None,
+    });
 
     let srtp_auth = Box::new(srtp_auth_t {
         type_: srtp_auth_type,
-        state: Box::into_raw(auth),
+        state: Box::into_raw(state),
         out_len: out_len,
         key_len: key_len,
         prefix_len: prefix_len,
@@ -130,47 +136,66 @@ fn auth_alloc(
     Error::Ok
 }
 
-extern "C" fn auth_init(state: *mut Box<dyn Auth>, key: *const u8, key_len: c_int) -> Error {
-    let auth = unsafe { state.as_mut().unwrap() };
-    let key_slice = unsafe { std::slice::from_raw_parts(key, key_len as usize) };
-    just_error(auth.init(key_slice))
+extern "C" fn auth_init(
+    state_ptr: *mut SrtpAuthState,
+    key_ptr: *const u8,
+    key_len: c_int,
+) -> Error {
+    let state = unsafe { state_ptr.as_mut().unwrap() };
+    let key = unsafe { std::slice::from_raw_parts(key_ptr, key_len as usize) };
+
+    match state.auth_type.create(key, state.tag_size) {
+        Err(err) => err,
+        Ok(auth) => {
+            state.auth = Some(auth);
+            Error::Ok
+        }
+    }
 }
 
 extern "C" fn auth_compute(
-    state: *mut Box<dyn Auth>,
-    buffer: *const u8,
+    state_ptr: *mut SrtpAuthState,
+    buffer_ptr: *const u8,
     octets_to_auth: c_int,
     tag_len: c_int,
-    tag: *mut u8,
+    tag_ptr: *mut u8,
 ) -> Error {
-    let auth = unsafe { state.as_mut().unwrap() };
-    let buffer_slice = unsafe { std::slice::from_raw_parts(buffer, octets_to_auth as usize) };
-    let tag_slice = unsafe { std::slice::from_raw_parts_mut(tag, tag_len as usize) };
-    just_error(auth.compute(buffer_slice, tag_slice))
+    let state = unsafe { state_ptr.as_mut().unwrap() };
+    let buffer = unsafe { std::slice::from_raw_parts(buffer_ptr, octets_to_auth as usize) };
+    let tag = unsafe { std::slice::from_raw_parts_mut(tag_ptr, tag_len as usize) };
+
+    let auth = state.auth.as_mut().unwrap();
+    match auth.update(buffer) {
+        Ok(_) => {}
+        Err(err) => return err,
+    };
+
+    just_error(auth.compute(tag))
 }
 
 extern "C" fn auth_update(
-    state: *mut Box<dyn Auth>,
-    buffer: *const u8,
+    state_ptr: *mut SrtpAuthState,
+    buffer_ptr: *const u8,
     octets_to_auth: c_int,
 ) -> Error {
-    let auth = unsafe { state.as_mut().unwrap() };
-    let buf_slice = unsafe { std::slice::from_raw_parts(buffer, octets_to_auth as usize) };
-    just_error(auth.update(buf_slice))
+    let state = unsafe { state_ptr.as_mut().unwrap() };
+    let buf_slice = unsafe { std::slice::from_raw_parts(buffer_ptr, octets_to_auth as usize) };
+    just_error(state.auth.as_mut().unwrap().update(buf_slice))
 }
 
-extern "C" fn auth_start(state: *mut Box<dyn Auth>) -> Error {
-    let auth = unsafe { state.as_mut().unwrap() };
-    just_error(auth.start())
+extern "C" fn auth_start(state_ptr: *mut SrtpAuthState) -> Error {
+    let state = unsafe { state_ptr.as_mut().unwrap() };
+    state.auth.as_mut().unwrap().reset();
+    Error::Ok
 }
 
 //
 // Null Auth
 //
 
-extern "C" fn null_alloc(ap: *mut srtp_auth_pointer_t, key_len: c_int, out_len: c_int) -> Error {
-    let auth_type = NullAuth {};
-    auth_alloc(&auth_type, &srtp_null_auth, ap, key_len, out_len, out_len)
+extern "C" fn null_alloc(ap: *mut *mut srtp_auth_t, key_len: c_int, out_len: c_int) -> Error {
+    let auth_type = Box::new(NullAuth {});
+    auth_alloc(auth_type, &srtp_null_auth, ap, key_len, out_len, out_len)
 }
 
 static srtp_null_auth_test_case: srtp_auth_test_case_t = srtp_auth_test_case_t {
@@ -201,22 +226,14 @@ pub static srtp_null_auth: srtp_auth_type_t = srtp_auth_type_t {
 //
 // HMAC Auth
 //
-extern "C" fn hmac_alloc(ap: *mut srtp_auth_pointer_t, key_len: c_int, out_len: c_int) -> Error {
-    let auth_type = NativeHMAC {};
-    auth_alloc(&auth_type, &srtp_hmac, ap, key_len, out_len, 0)
+extern "C" fn hmac_alloc(ap: *mut *mut srtp_auth_t, key_len: c_int, out_len: c_int) -> Error {
+    let auth_type = Box::new(NativeHMAC {});
+    auth_alloc(auth_type, &srtp_hmac, ap, key_len, out_len, 0)
 }
 
-static srtp_hmac_key: [u8; 20] = [
-    0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
-    0x0b, 0x0b, 0x0b, 0x0b,
-];
-
-static srtp_hmac_data: [u8; 8] = [0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65];
-
-static srtp_hmac_tag: [u8; 20] = [
-    0xb6, 0x17, 0x31, 0x86, 0x55, 0x05, 0x72, 0x64, 0xe2, 0x8b, 0xc0, 0xb6, 0xfb, 0x37, 0x8c, 0x8e,
-    0xf1, 0x46, 0xbe, 0x00,
-];
+static srtp_hmac_key: [u8; 20] = [0x0bu8; 20];
+static srtp_hmac_data: [u8; 8] = hex!("4869205468657265");
+static srtp_hmac_tag: [u8; 20] = hex!("b617318655057264e28bc0b6fb378c8ef146be00");
 
 static srtp_hmac_test_case: srtp_auth_test_case_t = srtp_auth_test_case_t {
     key_length_octets: 20,
@@ -258,7 +275,7 @@ pub static srtp_mod_hmac: srtp_debug_module_t = srtp_debug_module_t {
 #[no_mangle]
 pub extern "C" fn srtp_auth_type_alloc(
     at: *const srtp_auth_type_t,
-    ap: *mut srtp_auth_pointer_t,
+    ap: *mut *mut srtp_auth_t,
     key_len: c_int,
     out_len: c_int,
 ) -> Error {
@@ -345,8 +362,8 @@ extern "C" fn drop_type_then_drop_auth(c: *mut srtp_auth_t) -> Error {
     zero_and_drop(c)
 }
 
-pub fn make_auth_t(id: AuthTypeID, a: Box<dyn Auth>) -> srtp_auth_t {
-    let description = match id {
+pub fn make_auth_t(at: Box<dyn AuthType>, tag_len: c_int) -> srtp_auth_t {
+    let description = match at.id() {
         AuthTypeID::Null => srtp_null_auth_description.as_ptr(),
         AuthTypeID::HmacSha1 => srtp_hmac_description.as_ptr(),
     };
@@ -360,17 +377,20 @@ pub fn make_auth_t(id: AuthTypeID, a: Box<dyn Auth>) -> srtp_auth_t {
         start: Some(auth_start),
         description: description,
         test_data: std::ptr::null(),
-        id: id as srtp_auth_type_id_t,
+        id: at.id() as srtp_auth_type_id_t,
     });
 
-    let key_size = a.key_size() as c_int;
-    let tag_size = a.tag_size() as c_int;
-    let prefix_size = a.prefix_size() as c_int;
+    let state = SrtpAuthState {
+        auth_type: at,
+        tag_size: tag_len as usize,
+        auth: None,
+    };
+
     srtp_auth_t {
         type_: Box::into_raw(auth_type),
-        state: Box::into_raw(Box::new(a)),
-        key_len: key_size,
-        out_len: tag_size,
-        prefix_len: prefix_size,
+        state: Box::into_raw(Box::new(state)),
+        key_len: 0,
+        out_len: tag_len,
+        prefix_len: 0,
     }
 }
