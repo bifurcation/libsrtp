@@ -3,6 +3,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 
+use crate::aes_gcm::NativeAesGcm;
 use crate::aes_icm::NativeAesIcm;
 use crate::c::err::srtp_debug_module_t;
 use crate::c::{just_error, zero_and_drop};
@@ -188,10 +189,12 @@ extern "C" fn cipher_encrypt(
     octets_to_encrypt: *mut c_uint,
 ) -> Error {
     let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
-    let buf_size = unsafe { octets_to_encrypt.read() as usize };
+    let pt_size = unsafe { octets_to_encrypt.read() as usize };
+    // Assume that the buffer has enough space for the cipher's overhead
+    let buf_size = pt_size + cipher.overhead();
     let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr, buf_size) };
 
-    match cipher.encrypt(buf, buf_size) {
+    match cipher.encrypt(buf, pt_size) {
         Ok(len) => {
             unsafe { octets_to_encrypt.write(len as c_uint) };
             Error::Ok
@@ -345,7 +348,39 @@ pub static srtp_mod_aes_icm: srtp_debug_module_t = srtp_debug_module_t {
 };
 
 //
-// AES-ICM-128 implementation
+// AES-ICM-192 implementation
+//
+
+extern "C" fn aes_icm_192_alloc(
+    cp: *mut *mut srtp_cipher_t,
+    key_len: c_int,
+    tag_len: c_int,
+) -> Error {
+    let cipher_type = Box::new(NativeAesIcm::new(AesKeySize::Aes192));
+    cipher_alloc(cipher_type, &srtp_aes_icm_192, cp, key_len, tag_len)
+}
+
+// XXX(RLB) Test data not reproduced
+
+static srtp_aes_icm_192_description: &CStr = cstr!("AES-192 integer counter mode");
+
+#[no_mangle]
+pub static srtp_aes_icm_192: srtp_cipher_type_t = srtp_cipher_type_t {
+    alloc: Some(aes_icm_192_alloc),
+    dealloc: Some(zero_and_drop::<srtp_cipher_t>),
+    init: Some(cipher_init),
+    set_aad: Some(cipher_set_aad),
+    encrypt: Some(cipher_encrypt),
+    decrypt: Some(cipher_decrypt),
+    set_iv: Some(cipher_set_iv),
+    get_tag: Some(cipher_get_tag),
+    description: srtp_aes_icm_192_description.as_ptr(),
+    test_data: std::ptr::null(),
+    id: CipherTypeID::AesIcm192 as srtp_cipher_type_id_t,
+};
+
+//
+// AES-ICM-256 implementation
 //
 
 extern "C" fn aes_icm_256_alloc(
@@ -406,6 +441,80 @@ pub static srtp_aes_icm_256: srtp_cipher_type_t = srtp_cipher_type_t {
     description: srtp_aes_icm_256_description.as_ptr(),
     test_data: &srtp_aes_icm_256_test_case,
     id: CipherTypeID::AesIcm256 as srtp_cipher_type_id_t,
+};
+
+//
+// AES-GCM-128 implementation
+//
+
+extern "C" fn aes_gcm_128_alloc(
+    cp: *mut *mut srtp_cipher_t,
+    key_len: c_int,
+    tag_len: c_int,
+) -> Error {
+    let cipher_type = match NativeAesGcm::new(AesKeySize::Aes128) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+
+    let cipher_type = Box::new(cipher_type);
+    cipher_alloc(cipher_type, &srtp_aes_gcm_128, cp, key_len, tag_len)
+}
+
+// XXX(RLB) Test data not reproduced
+
+static srtp_aes_gcm_128_description: &CStr = cstr!("AES-128 galois counter mode");
+
+#[no_mangle]
+pub static srtp_aes_gcm_128: srtp_cipher_type_t = srtp_cipher_type_t {
+    alloc: Some(aes_gcm_128_alloc),
+    dealloc: Some(zero_and_drop::<srtp_cipher_t>),
+    init: Some(cipher_init),
+    set_aad: Some(cipher_set_aad),
+    encrypt: Some(cipher_encrypt),
+    decrypt: Some(cipher_decrypt),
+    set_iv: Some(cipher_set_iv),
+    get_tag: Some(cipher_get_tag),
+    description: srtp_aes_gcm_128_description.as_ptr(),
+    test_data: std::ptr::null(),
+    id: CipherTypeID::AesGcm128 as srtp_cipher_type_id_t,
+};
+
+//
+// AES-GCM-256 implementation
+//
+
+extern "C" fn aes_gcm_256_alloc(
+    cp: *mut *mut srtp_cipher_t,
+    key_len: c_int,
+    tag_len: c_int,
+) -> Error {
+    let cipher_type = match NativeAesGcm::new(AesKeySize::Aes256) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+
+    let cipher_type = Box::new(cipher_type);
+    cipher_alloc(cipher_type, &srtp_aes_gcm_256, cp, key_len, tag_len)
+}
+
+// XXX(RLB) Test data not reproduced
+
+static srtp_aes_gcm_256_description: &CStr = cstr!("AES-256 galois counter mode");
+
+#[no_mangle]
+pub static srtp_aes_gcm_256: srtp_cipher_type_t = srtp_cipher_type_t {
+    alloc: Some(aes_gcm_256_alloc),
+    dealloc: Some(zero_and_drop::<srtp_cipher_t>),
+    init: Some(cipher_init),
+    set_aad: Some(cipher_set_aad),
+    encrypt: Some(cipher_encrypt),
+    decrypt: Some(cipher_decrypt),
+    set_iv: Some(cipher_set_iv),
+    get_tag: Some(cipher_get_tag),
+    description: srtp_aes_gcm_256_description.as_ptr(),
+    test_data: std::ptr::null(),
+    id: CipherTypeID::AesGcm256 as srtp_cipher_type_id_t,
 };
 
 //
@@ -569,11 +678,6 @@ extern "C" fn drop_type_then_drop_cipher(c: *mut srtp_cipher_t) -> Error {
     let _ = unsafe { Box::from_raw(c_ref.type_ as *mut srtp_cipher_type_t) };
     zero_and_drop(c)
 }
-
-// Ciphers not implemented as static types
-static srtp_aes_icm_192_description: &CStr = cstr!("aes icm 192");
-static srtp_aes_gcm_128_description: &CStr = cstr!("aes gcm 128");
-static srtp_aes_gcm_256_description: &CStr = cstr!("aes gcm 256");
 
 pub fn make_cipher_t(ct: Box<dyn CipherType>) -> srtp_cipher_t {
     let description = match ct.id() {

@@ -3,15 +3,19 @@ use std::convert::TryFrom;
 use std::os::raw::c_int;
 use std::slice;
 
+// XXX(RLB) These methods in C expect `ctx` to have type srtp_sha1_ctx_t, whereas here we use
+// Box<Sha1>.  The important thing here is that whatever type we use for `ctx` has smaller size
+// than srtp_sha1_ctx_t, so that it fits in the memory allocated by the caller.
+
 #[no_mangle]
-pub extern "C" fn srtp_sha1_init(ctx: *mut Sha1) {
+pub extern "C" fn srtp_sha1_init(ctx: *mut Box<Sha1>) {
     unsafe {
-        *ctx = Sha1::new();
+        *ctx = Box::new(Sha1::new());
     }
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_sha1_update(ctx: *mut Sha1, msg_ptr: *const u8, octets_in_msg: c_int) {
+pub extern "C" fn srtp_sha1_update(ctx: *mut Box<Sha1>, msg_ptr: *const u8, octets_in_msg: c_int) {
     unsafe {
         let msg_size = usize::try_from(octets_in_msg as i32).unwrap();
         let msg = slice::from_raw_parts(msg_ptr, msg_size);
@@ -22,7 +26,7 @@ pub extern "C" fn srtp_sha1_update(ctx: *mut Sha1, msg_ptr: *const u8, octets_in
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_sha1_final(ctx: *mut Sha1, output_ptr: *mut u32) {
+pub extern "C" fn srtp_sha1_final(ctx: *mut Box<Sha1>, output_ptr: *mut u32) {
     unsafe {
         let output_u8 = output_ptr as *mut u8;
         let output_slice = slice::from_raw_parts_mut(output_u8, 20);
@@ -39,8 +43,8 @@ mod tests {
 
     #[test]
     fn test_sha1_c() -> Result<(), hex::FromHexError> {
-        let mut ctx = Sha1::new();
-        let ctx_ptr: *mut Sha1 = &mut ctx;
+        let mut ctx = Box::new(Sha1::new());
+        let ctx_ptr: *mut Box<Sha1> = &mut ctx;
 
         let msg: [u8; 4] = [0x9f, 0xc3, 0xfe, 0x08];
         let msg_len: c_int = 4;

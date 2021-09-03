@@ -296,8 +296,10 @@ pub trait Cipher: Reset {
     fn add_aad(&mut self, aad: &[u8]) -> Result<(), Error>;
     fn set_nonce(&mut self, iv: &[u8]) -> Result<(), Error>;
 
-    fn encrypt(&self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
-    fn decrypt(&self, buf: &mut [u8]) -> Result<usize, Error>;
+    // XXX(RLB) The mutability of self on encrypt/decrypt is required to match the C tests'
+    // expectations of ciphers.  It is not required for the Rust SRTP implementation.
+    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
+    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error>;
 }
 
 impl Reset for Box<dyn Cipher> {

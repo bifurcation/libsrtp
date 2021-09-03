@@ -1390,4 +1390,58 @@ mod test {
         }
         Ok(())
     }
+
+    // SRTP validation test from srtp_driver.c
+    #[test]
+    fn test_rtp_validation_c() -> Result<(), Error> {
+        let srtp_pt = hex!("800f1234decafbadcafebabeabababababababababababababababab");
+        let srtp_ct =
+            hex!("800f1234decafbadcafebabe4e55dc4ce79978d88ca4d215949d2402b78d6acc99ea179b8dbb");
+
+        let srtcp_pt = hex!("81c8000bcafebabeabababababababababababababababab");
+        let srtcp_ct =
+            hex!("81c8000bcafebabe7128035be487b9bdbef89041f977a5a880000001993e08cd54d6c1230798");
+
+        let policies = [Policy {
+            ssrc: Ssrc::AnyOutbound,
+            rtp: CryptoPolicy::RTP_DEFAULT,
+            rtcp: CryptoPolicy::RTCP_DEFAULT,
+            keys: vec![MasterKey {
+                key: KEY.to_vec(),
+                salt: SALT.to_vec(),
+                id: MKI.to_vec(),
+            }],
+            window_size: 128,
+            allow_repeat_tx: false,
+            xtn_headers_to_encrypt: vec![],
+        }];
+
+        let kernel = CryptoKernel::default()?;
+        let mut ctx_send = Context::new(&kernel, &policies)?;
+        let mut ctx_recv = Context::new(&kernel, &policies)?;
+
+        // SRTP encrypt
+        let pt_size = srtp_pt.len();
+        let mut buffer = [0u8; 80];
+        buffer[..pt_size].copy_from_slice(&srtp_pt);
+        let ct_size = ctx_send.srtp_protect(&mut buffer, pt_size)?;
+        assert_eq!(srtp_ct, buffer[..ct_size]);
+
+        // SRTP decrypt
+        let pt_size = ctx_recv.srtp_unprotect(&mut buffer[..ct_size])?;
+        assert_eq!(srtp_pt, buffer[..pt_size]);
+
+        // SRTCP encrypt
+        buffer.fill(0);
+        let pt_size = srtcp_pt.len();
+        buffer[..pt_size].copy_from_slice(&srtcp_pt);
+        let ct_size = ctx_send.srtcp_protect(&mut buffer, pt_size)?;
+        assert_eq!(srtcp_ct, buffer[..ct_size]);
+
+        // SRTCP decrypt
+        let pt_size = ctx_recv.srtcp_unprotect(&mut buffer[..ct_size])?;
+        assert_eq!(srtcp_pt, buffer[..pt_size]);
+
+        Ok(())
+    }
 }

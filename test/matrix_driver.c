@@ -184,26 +184,24 @@ int main() {
   MAIN_REQUIRE(srtp_init());
 
   // SRTP tests
-  /*
   MAIN_REQUIRE(do_srtp(0, 0, 0));
   MAIN_REQUIRE(do_srtp(0, 1, 0));
   MAIN_REQUIRE(do_srtp(0, 0, 1));
+#ifdef GCM
   MAIN_REQUIRE(do_srtp(1, 0, 0));
   MAIN_REQUIRE(do_srtp(1, 1, 0));
   MAIN_REQUIRE(do_srtp(1, 0, 1));
-  */
+#endif
 
   // SRTCP tests
-  /*
   MAIN_REQUIRE(do_srtcp(0, 0, 0));
   MAIN_REQUIRE(do_srtcp(0, 1, 0));
   MAIN_REQUIRE(do_srtcp(0, 0, 1));
-  */
+#ifdef GCM
   MAIN_REQUIRE(do_srtcp(1, 0, 0));
-  /*
   MAIN_REQUIRE(do_srtcp(1, 1, 0));
   MAIN_REQUIRE(do_srtcp(1, 0, 1));
-  */
+#endif
 
   return srtp_shutdown();
 }

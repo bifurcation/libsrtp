@@ -135,7 +135,7 @@ where
         Ok(())
     }
 
-    fn encrypt(&self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         let ct_size = pt_size + Self::TAG_SIZE;
         if buf.len() < ct_size {
             return Err(Error::BadParam);
@@ -152,7 +152,7 @@ where
         Ok(ct_size)
     }
 
-    fn decrypt(&self, buf: &mut [u8]) -> Result<usize, Error> {
+    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         let ct_size = buf.len();
         if ct_size < Self::TAG_SIZE {
             return Err(Error::BadParam);

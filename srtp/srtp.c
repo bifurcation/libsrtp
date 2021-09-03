@@ -3659,9 +3659,12 @@ static srtp_err_status_t srtp_protect_rtcp_aead(
         /*
          * Even though we're not encrypting the payload, we need
          * to run the cipher to get the auth tag.
+         *
+         * XXX(RLB): In the Rust version, this will cause the auth tag to be
+         * written after `auth_tag`.  Then the `get_tag` call will be a noop.
          */
         unsigned int nolen = 0;
-        status = srtp_cipher_encrypt(session_keys->rtcp_cipher, NULL, &nolen);
+        status = srtp_cipher_encrypt(session_keys->rtcp_cipher, (uint8_t *)auth_tag, &nolen);
         if (status) {
             return srtp_err_status_cipher_fail;
         }

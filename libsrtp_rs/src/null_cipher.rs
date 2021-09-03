@@ -56,11 +56,11 @@ impl Cipher for Context {
         Ok(())
     }
 
-    fn encrypt(&self, _buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+    fn encrypt(&mut self, _buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         Ok(pt_size)
     }
 
-    fn decrypt(&self, _buf: &mut [u8]) -> Result<usize, Error> {
+    fn decrypt(&mut self, _buf: &mut [u8]) -> Result<usize, Error> {
         Ok(_buf.len())
     }
 }

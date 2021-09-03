@@ -67,6 +67,7 @@ if(ENABLE_RUST)
   find_package(Corrosion REQUIRED)
   corrosion_import_crate(MANIFEST_PATH libsrtp_rs/Cargo.toml)
   set(RUST ${ENABLE_RUST} CACHE BOOL INTERNAL)
+  set(GCM ${ENABLE_RUST} CACHE BOOL INTERNAL)
   set(LIBSRTP_RS_INCLUDE_DIR "./libsrtp_rs/include" CACHE PATH INTERNAL)
 endif()
 

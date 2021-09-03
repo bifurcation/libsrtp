@@ -41,11 +41,7 @@ impl AuthType for NullAuth {
         AuthTypeID::Null
     }
 
-    fn create(&self, key: &[u8], tag_size: usize) -> Result<Box<dyn Auth>, Error> {
-        if key.len() > 0 || tag_size > 0 {
-            return Err(Error::BadParam);
-        }
-
+    fn create(&self, _key: &[u8], _tag_size: usize) -> Result<Box<dyn Auth>, Error> {
         Ok(Box::new(Context))
     }
 

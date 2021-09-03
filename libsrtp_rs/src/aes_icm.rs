@@ -11,11 +11,9 @@ use aes::cipher::{
     BlockCipher, BlockEncrypt, NewBlockCipher,
 };
 use aes::{Aes128, Aes192, Aes256};
-use ctr::cipher::{FromBlockCipher, NewCipher, StreamCipher, StreamCipherSeek};
+use ctr::cipher::{NewCipher, StreamCipher, StreamCipherSeek};
 use ctr::Ctr128BE;
 use std::ops::Range;
-
-type Nonce<C> = GenericArray<u8, <Ctr128BE<C> as FromBlockCipher>::NonceSize>;
 
 #[derive(Clone)]
 struct Context<C>
@@ -25,7 +23,6 @@ where
     key_size: AesKeySize,
     key: [u8; 32],
     salt: [u8; 14],
-    nonce: Option<Nonce<C>>,
     cipher: Option<Ctr128BE<C>>,
 }
 
@@ -34,7 +31,6 @@ where
     C: Clone + BlockEncrypt + BlockCipher<BlockSize = U16> + NewBlockCipher + 'static,
 {
     fn reset(&mut self) {
-        self.nonce = None;
         self.cipher = None;
     }
 }
@@ -55,7 +51,6 @@ where
             key_size: key_size,
             key: Default::default(),
             salt: Default::default(),
-            nonce: None,
             cipher: None,
         };
 
@@ -174,20 +169,22 @@ where
     }
 
     fn set_nonce(&mut self, nonce: &[u8]) -> Result<(), Error> {
-        self.nonce = Some(Nonce::<C>::clone_from_slice(nonce));
+        let iv = GenericArray::from_slice(&nonce);
+        let key = GenericArray::from_slice(self.key());
+        self.cipher = Some(Ctr128BE::new(&key, iv.into()));
         Ok(())
     }
 
-    fn encrypt(&self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
-        let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
-        let key = GenericArray::from_slice(self.key());
-        Ctr128BE::<C>::new(&key, nonce.into())
+    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+        self.cipher
+            .as_mut()
+            .ok_or(Error::CipherFail)?
             .try_apply_keystream(&mut buf[..pt_size])
             .map(|_| pt_size)
             .map_err(|_| Error::CipherFail)
     }
 
-    fn decrypt(&self, buf: &mut [u8]) -> Result<usize, Error> {
+    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         self.encrypt(buf, buf.len())
     }
 }

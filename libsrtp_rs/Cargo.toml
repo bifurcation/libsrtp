@@ -27,5 +27,6 @@ hex-literal = "0.3.3"      # For test vector literals
 sha-1 = "0.9.6"            # Default, pure-Rust crypto
 hmac = "0.11.0"            # Default, pure-Rust crypto
 aes = "0.7.4"              # Default, pure-Rust crypto
+cipher = "0.3.0"           # Default, pure-Rust crypto
 ctr = "0.7.0"              # Default, pure-Rust crypto
 aes-gcm = { version = "0.9.2", features = ["aes"] } # Default, pure-Rust crypto
