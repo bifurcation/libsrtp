@@ -35,6 +35,10 @@ impl Cipher for Context {
         0
     }
 
+    fn salt(&self) -> Vec<u8> {
+        vec![]
+    }
+
     fn rtp_nonce(
         &self,
         _ssrc: u32,

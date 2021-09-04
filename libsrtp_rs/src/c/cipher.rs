@@ -11,6 +11,7 @@ use crate::crypto_kernel::constants::AesKeySize;
 use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
 use crate::null_cipher::NullCipher;
 use crate::srtp::Error;
+use crate::util::xor_eq;
 use cpu_time::ThreadTime;
 use cstr::cstr;
 use rand::RngCore;
@@ -111,6 +112,10 @@ pub struct srtp_cipher_t {
 
 impl Drop for srtp_cipher_t {
     fn drop(&mut self) {
+        if self.state.is_null() {
+            return;
+        }
+
         // Take ownership of the SrtpCipherState so that it gets dropped
         let _ = unsafe { self.state.read() };
         self.state = std::ptr::null_mut();
@@ -212,13 +217,13 @@ extern "C" fn cipher_decrypt(
     let buf_size = unsafe { octets_to_decrypt.read() as usize };
     let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr, buf_size) };
 
-    match cipher.decrypt(buf) {
-        Ok(len) => {
-            unsafe { octets_to_decrypt.write(len as c_uint) };
-            Error::Ok
-        }
-        Err(err) => err,
-    }
+    let ct_size = match cipher.decrypt(buf) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+
+    unsafe { octets_to_decrypt.write(ct_size as c_uint) };
+    Error::Ok
 }
 
 extern "C" fn cipher_set_iv(
@@ -227,9 +232,24 @@ extern "C" fn cipher_set_iv(
     _direction: srtp_cipher_direction_t,
 ) -> Error {
     let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
-    let iv = unsafe { std::slice::from_raw_parts(iv_ptr, cipher.id().nonce_size()) };
-    cipher.reset(); // XXX(RLB) This seems to be an implicit assumption of the C code
-    just_error(cipher.set_nonce(iv))
+    let iv = unsafe { std::slice::from_raw_parts_mut(iv_ptr, cipher.id().nonce_size()) };
+
+    // XXX(RLB) This seems to be an implicit assumption of the C code
+    cipher.reset();
+
+    // XXX(RLB) The C ciphers do XOR with salt internally (but only for non-AEAD ciphers!); the
+    // Rust ones never do.  So we need to align the semantics here in order to meet the
+    // expectations of the C code.
+    let mut iv_buf = [0u8; 16];
+    let iv_copy = &mut iv_buf[..iv.len()];
+    iv_copy.copy_from_slice(iv);
+
+    match cipher.id() {
+        CipherTypeID::AesGcm128 | CipherTypeID::AesGcm256 => {}
+        _ => xor_eq(iv_copy, &cipher.salt()),
+    };
+
+    just_error(cipher.set_nonce(iv_copy))
 }
 
 extern "C" fn cipher_get_tag(_state: *mut SrtpCipherState, _tag: *mut u8, _len: *mut u32) -> Error {
@@ -522,7 +542,9 @@ pub static srtp_aes_gcm_256: srtp_cipher_type_t = srtp_cipher_type_t {
 //
 #[no_mangle]
 pub extern "C" fn srtp_cipher_get_key_length(c: *const srtp_cipher_t) -> c_int {
-    unsafe { c.as_ref().unwrap().key_len }
+    let state = unsafe { c.as_ref().unwrap().state.as_ref().unwrap() };
+    let id = state.cipher_type.id();
+    (id.key_size() + id.salt_size()) as c_int
 }
 
 #[no_mangle]

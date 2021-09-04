@@ -54,7 +54,7 @@ pub extern "C" fn srtp_crypto_kernel_alloc_cipher(
     id: CipherTypeID,
     cp: *mut *mut srtp_cipher_t,
     _key_len: c_int,
-    _tag_len: c_int,
+    tag_len: c_int,
 ) -> Error {
     if let None = unsafe { &singleton_kernel } {
         return Error::InitFail;
@@ -63,6 +63,18 @@ pub extern "C" fn srtp_crypto_kernel_alloc_cipher(
     let cipher_type = match unsafe { singleton_kernel.as_ref().unwrap().cipher_type(id) } {
         Ok(x) => x,
         Err(err) => return err,
+    };
+
+    // Disallow truncated GCM
+    // XXX(RLB) We can't enforce a general requirement that tag_len == id.tag_size() because
+    // the libsrtp policy struct conflates the AEAD tag size with the external MAC tag size.
+    match id {
+        CipherTypeID::AesGcm128 | CipherTypeID::AesGcm256 => {
+            if tag_len != 16 {
+                return Error::BadParam;
+            }
+        }
+        _ => {}
     };
 
     let cipher = make_cipher_t(cipher_type);
@@ -75,7 +87,7 @@ pub extern "C" fn srtp_crypto_kernel_alloc_cipher(
 pub extern "C" fn srtp_crypto_kernel_alloc_auth(
     id: AuthTypeID,
     ap: *mut *mut srtp_auth_t,
-    _key_len: c_int,
+    key_len: c_int,
     tag_len: c_int,
 ) -> Error {
     if let None = unsafe { &singleton_kernel } {
@@ -87,7 +99,7 @@ pub extern "C" fn srtp_crypto_kernel_alloc_auth(
         Err(err) => return err,
     };
 
-    let auth = make_auth_t(auth_type, tag_len);
+    let auth = make_auth_t(auth_type, key_len, tag_len);
     let auth_ptr = Box::into_raw(Box::new(auth));
     unsafe { ap.write(auth_ptr) };
     Error::Ok

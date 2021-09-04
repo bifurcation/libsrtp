@@ -19,6 +19,10 @@ fn just_error(result: Result<(), Error>) -> Error {
 }
 
 extern "C" fn zero_and_drop<T>(p: *mut T) -> Error {
+    if p.is_null() {
+        return Error::Ok;
+    }
+
     unsafe {
         let mut zero = std::mem::MaybeUninit::<T>::zeroed();
         std::ptr::swap(p, zero.as_mut_ptr());

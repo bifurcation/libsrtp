@@ -149,6 +149,10 @@ where
         0
     }
 
+    fn salt(&self) -> Vec<u8> {
+        self.salt.clone().into()
+    }
+
     fn rtp_nonce(
         &self,
         ssrc: u32,

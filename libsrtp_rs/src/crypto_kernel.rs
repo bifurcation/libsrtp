@@ -274,6 +274,9 @@ pub trait Cipher: Reset {
     fn id(&self) -> CipherTypeID;
     fn overhead(&self) -> usize;
 
+    // XXX(RLB) This is only exposed so that the C interface glue code can use it
+    fn salt(&self) -> Vec<u8>;
+
     fn rtp_nonce(
         &self,
         ssrc: u32,

@@ -69,6 +69,10 @@ where
         Self::TAG_SIZE
     }
 
+    fn salt(&self) -> Vec<u8> {
+        self.salt.clone().into()
+    }
+
     // https://datatracker.ietf.org/doc/html/rfc7714#section-8.3
     //
     //   0  0  0  0  0  0  0  0  0  0  1  1

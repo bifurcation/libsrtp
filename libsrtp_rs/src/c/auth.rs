@@ -90,6 +90,10 @@ unsafe impl Sync for srtp_auth_t {}
 
 impl Drop for srtp_auth_t {
     fn drop(&mut self) {
+        if self.state.is_null() {
+            return;
+        }
+
         let _ = unsafe { self.state.read() };
         self.state = std::ptr::null_mut();
     }
@@ -362,7 +366,7 @@ extern "C" fn drop_type_then_drop_auth(c: *mut srtp_auth_t) -> Error {
     zero_and_drop(c)
 }
 
-pub fn make_auth_t(at: Box<dyn AuthType>, tag_len: c_int) -> srtp_auth_t {
+pub fn make_auth_t(at: Box<dyn AuthType>, key_len: c_int, tag_len: c_int) -> srtp_auth_t {
     let description = match at.id() {
         AuthTypeID::Null => srtp_null_auth_description.as_ptr(),
         AuthTypeID::HmacSha1 => srtp_hmac_description.as_ptr(),
@@ -389,7 +393,7 @@ pub fn make_auth_t(at: Box<dyn AuthType>, tag_len: c_int) -> srtp_auth_t {
     srtp_auth_t {
         type_: Box::into_raw(auth_type),
         state: Box::into_raw(Box::new(state)),
-        key_len: 0,
+        key_len: key_len,
         out_len: tag_len,
         prefix_len: 0,
     }

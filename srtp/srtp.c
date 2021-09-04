@@ -328,6 +328,10 @@ srtp_err_status_t srtp_stream_alloc(srtp_stream_ctx_t **str_ptr,
     str->session_keys = (srtp_session_keys_t *)srtp_crypto_alloc(
         sizeof(srtp_session_keys_t) * str->num_master_keys);
 
+    // XXX(RLB) For some reason without this line, strp_crypto_alloc is not
+    // setting all memory to zero, which means we end up with random pointers.
+    memset(str->session_keys, 0, sizeof(srtp_session_keys_t) * str->num_master_keys);
+
     if (str->session_keys == NULL) {
         srtp_stream_dealloc(str, NULL);
         return srtp_err_status_alloc_fail;
@@ -625,6 +629,7 @@ static srtp_err_status_t srtp_kdf_init(srtp_kdf_t *kdf,
         return srtp_err_status_bad_param;
         break;
     }
+
     memcpy(kdf->master_key, key, key_len);
     memcpy(kdf->master_salt, key + key_len, salt_len);
     return srtp_err_status_ok;
@@ -706,6 +711,7 @@ static srtp_err_status_t srtp_kdf_init(srtp_kdf_t *kdf,
         srtp_cipher_dealloc(kdf->cipher);
         return stat;
     }
+
     return srtp_err_status_ok;
 }
 
@@ -1405,7 +1411,6 @@ static srtp_err_status_t srtp_process_header_encryption(
                                         keystream, &xlen_with_header);
             if (status)
                 return srtp_err_status_cipher_fail;
-
 
             debug_print(mod_srtp, "xtn header keystream: %s",
                 srtp_octet_string_hex_string(keystream, xlen_with_header));
