@@ -10,7 +10,7 @@ use crate::crypto_kernel::{AuthTypeID, CipherTypeID, CryptoKernel};
 use crate::srtp::Error;
 use std::os::raw::{c_char, c_int};
 
-static mut singleton_kernel: Option<CryptoKernel> = None;
+pub static mut singleton_kernel: Option<CryptoKernel> = None;
 
 #[no_mangle]
 pub extern "C" fn srtp_crypto_kernel_init() -> Error {
@@ -38,7 +38,7 @@ pub extern "C" fn srtp_crypto_kernel_init() -> Error {
 
 #[no_mangle]
 pub extern "C" fn srtp_crypto_kernel_shutdown() -> Error {
-    // Trigger GC on the singleton kernel
+    // Trigger drop of the singleton kernel
     unsafe { singleton_kernel = None };
     Error::Ok
 }
