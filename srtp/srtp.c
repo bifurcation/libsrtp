@@ -4577,6 +4577,7 @@ srtp_err_status_t get_protect_trailer_length(srtp_t session,
     if (stream != NULL) {
         stream_get_protect_trailer_length(stream, is_rtp, use_mki, mki_index,
                                           length);
+        return;
     }
 
     stream = session->stream_list;
