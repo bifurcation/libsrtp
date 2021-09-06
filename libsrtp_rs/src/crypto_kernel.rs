@@ -313,6 +313,18 @@ impl Reset for Box<dyn Cipher> {
 
 pub type CipherInstance = Rc<RefCell<Instance<Box<dyn Cipher>>>>;
 
+pub trait Overhead {
+    fn overhead(&self) -> Result<usize, Error>;
+}
+
+impl Overhead for CipherInstance {
+    fn overhead(&self) -> Result<usize, Error> {
+        let mut inst = self.try_borrow_mut().map_err(|_| Error::Fail)?;
+        let op = inst.start();
+        Ok(op.overhead())
+    }
+}
+
 pub trait CipherType {
     fn id(&self) -> CipherTypeID;
     fn create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn Cipher>, Error>;

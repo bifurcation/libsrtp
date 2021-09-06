@@ -3,9 +3,10 @@ use crate::kdf::*;
 use crate::key_limit::*;
 use crate::policy::*;
 use crate::replay::*;
-use crate::rtp_header::{SrtcpPacket, SrtpPacket};
+use crate::rtp_header::{PackedSize, SrtcpPacket, SrtcpTrailer, SrtpPacket};
 use constant_time_eq::constant_time_eq;
 use std::any::Any;
+use std::cmp;
 use std::rc::{Rc, Weak};
 
 #[repr(i32)]
@@ -417,6 +418,17 @@ impl SessionKeys {
         pkt.set_payload_size(pt_size)?;
         Ok(())
     }
+
+    fn trailer_size(&self, is_rtcp: bool) -> Result<usize, Error> {
+        if !is_rtcp {
+            Ok(self.rtp_cipher.overhead()? + self.rtp_auth.tag_size()? + self.mki_id.len())
+        } else {
+            Ok(self.rtcp_cipher.overhead()?
+                + self.rtcp_auth.tag_size()?
+                + self.mki_id.len()
+                + SrtcpTrailer::PACKED_SIZE)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -480,20 +492,32 @@ impl Stream {
         Ok(stream)
     }
 
-    pub fn get_session_keys(
-        &mut self,
-        use_mki: bool,
-        mki_index: usize,
-    ) -> Option<&mut SessionKeys> {
+    pub fn get_session_keys(&self, use_mki: bool, mki_index: usize) -> Result<&SessionKeys, Error> {
         if !use_mki {
-            return Some(&mut self.session_keys[0]);
+            return Ok(&self.session_keys[0]);
         }
 
         if mki_index > self.session_keys.len() {
-            return None;
+            return Err(Error::BadMki);
         }
 
-        Some(&mut self.session_keys[mki_index])
+        Ok(&self.session_keys[mki_index])
+    }
+
+    pub fn get_session_keys_mut(
+        &mut self,
+        use_mki: bool,
+        mki_index: usize,
+    ) -> Result<&mut SessionKeys, Error> {
+        if !use_mki {
+            return Ok(&mut self.session_keys[0]);
+        }
+
+        if mki_index > self.session_keys.len() {
+            return Err(Error::BadMki);
+        }
+
+        Ok(&mut self.session_keys[mki_index])
     }
 
     pub fn estimate_packet_index(
@@ -545,10 +569,7 @@ impl Stream {
         // sk reference to self.  It would be nice to have a more elegant approach.
         let ssrc = self.ssrc;
         let xtn_headers_to_encrypt = self.xtn_headers_to_encrypt.clone();
-        let sk = match self.get_session_keys(use_mki, mki_index) {
-            Some(x) => x,
-            None => return Err(Error::BadMki),
-        };
+        let sk = self.get_session_keys_mut(use_mki, mki_index)?;
 
         // Update the key usage limit
         sk.check_key_usage_limit(|e| event_handler.handle(ssrc, e))?;
@@ -632,10 +653,7 @@ impl Stream {
         // Look up the session keys by MKI
         let ssrc = self.ssrc;
         let services = self.rtcp_services;
-        let sk = match self.get_session_keys(use_mki, mki_index) {
-            Some(x) => x,
-            None => return Err(Error::BadMki),
-        };
+        let sk = self.get_session_keys_mut(use_mki, mki_index)?;
 
         // Set the RTCP trailer
         pkt.set_e_index(services, index)?;
@@ -703,6 +721,19 @@ impl Stream {
         self.rtcp_rdb.add(trailer.index)?;
 
         Ok(pkt.size())
+    }
+
+    fn trailer_size(&self, is_rtcp: bool, use_mki: bool, mki_index: usize) -> Result<usize, Error> {
+        self.get_session_keys(use_mki, mki_index)?
+            .trailer_size(is_rtcp)
+    }
+
+    fn get_roc(&self) -> RolloverCounter {
+        self.rtp_rdbx.roc()
+    }
+
+    fn set_roc(&mut self, roc: RolloverCounter) -> Result<(), Error> {
+        self.rtp_rdbx.set_roc(roc)
     }
 }
 
@@ -806,7 +837,17 @@ impl Context {
         }
     }
 
-    fn get_stream(&mut self, ssrc: Ssrc) -> Option<usize> {
+    fn get_stream(&self, ssrc: u32) -> Option<usize> {
+        for i in 0..self.streams.len() {
+            match self.streams[i].ssrc.value() {
+                Ok(x) if x == ssrc => return Some(i),
+                Err(_) | Ok(_) => {}
+            }
+        }
+        None
+    }
+
+    fn get_directed_stream(&mut self, ssrc: Ssrc) -> Option<usize> {
         for i in 0..self.streams.len() {
             if self.streams[i].ssrc.equal_or_generic(ssrc) {
                 // XXX(RLB) If we don't need Any, we can use `==` above, remove this line, and
@@ -818,7 +859,7 @@ impl Context {
         None
     }
 
-    pub fn remove_stream(&mut self, ssrc: Ssrc) -> Result<(), Error> {
+    pub fn remove_stream(&mut self, ssrc: u32) -> Result<(), Error> {
         match self.get_stream(ssrc) {
             Some(i) => {
                 self.streams.remove(i);
@@ -849,7 +890,7 @@ impl Context {
         kernel: &CryptoKernel,
         policy: &Policy,
     ) -> Result<(), Error> {
-        let ssrc = policy.ssrc;
+        let ssrc = policy.ssrc.value()?;
         let stream_index = self.get_stream(ssrc).ok_or(Error::BadParam)?;
 
         // Save the old extended seq
@@ -931,7 +972,7 @@ impl Context {
 
         // Find or create the correct stream
         let ssrc = Ssrc::Outbound(pkt.header.ssrc);
-        let stream_index = match self.get_stream(ssrc) {
+        let stream_index = match self.get_directed_stream(ssrc) {
             Some(x) => x,
             None => {
                 if self.stream_template.is_none() {
@@ -962,7 +1003,7 @@ impl Context {
 
         // Get or create the stream
         let ssrc = Ssrc::Inbound(pkt.header.ssrc);
-        let stream_index = self.get_stream(ssrc);
+        let stream_index = self.get_directed_stream(ssrc);
         let mut new_stream = match stream_index {
             Some(_) => None,
             None => Some(self.make_stream(ssrc)?),
@@ -998,7 +1039,7 @@ impl Context {
 
         // Find or create the correct stream
         let ssrc = Ssrc::Outbound(pkt.header.ssrc);
-        let stream_index = match self.get_stream(ssrc) {
+        let stream_index = match self.get_directed_stream(ssrc) {
             Some(x) => x,
             None => {
                 if self.stream_template.is_none() {
@@ -1029,7 +1070,7 @@ impl Context {
 
         // Get or create the stream
         let ssrc = Ssrc::Inbound(pkt.header.ssrc);
-        let stream_index = self.get_stream(ssrc);
+        let stream_index = self.get_directed_stream(ssrc);
         let mut new_stream = match stream_index {
             Some(_) => None,
             None => Some(self.make_stream(ssrc)?),
@@ -1048,6 +1089,55 @@ impl Context {
         }
 
         Ok(pt_size)
+    }
+
+    fn trailer_size(&self, is_rtcp: bool, use_mki: bool, mki_index: usize) -> Result<usize, Error> {
+        // XXX(RLB) This is what the C code appears to intend, but does not actually do.  That
+        // code examines the tempalte and gets the template's trailer size, but then is missing a
+        // return so that it always iterates the streams and returns the max.
+        if self.stream_template.is_some() {
+            let template = self.stream_template.as_ref().unwrap();
+            return template.trailer_size(is_rtcp, use_mki, mki_index);
+        }
+
+        // XXX(RLB) We could use streams.iter().map().fold(0, cmp::max) if Stream::trailer_size
+        // weren't fallible.  But as it is, we have to iterate / max manually
+        let mut size = 0;
+        for stream in &self.streams {
+            size = cmp::max(size, stream.trailer_size(is_rtcp, use_mki, mki_index)?);
+        }
+        Ok(size)
+    }
+
+    pub fn srtp_trailer_size(&self, use_mki: bool, mki_index: usize) -> Result<usize, Error> {
+        self.trailer_size(false, use_mki, mki_index)
+    }
+
+    pub fn srtcp_trailer_size(
+        &self,
+        ssrc: u32,
+        use_mki: bool,
+        mki_index: usize,
+    ) -> Result<usize, Error> {
+        self.trailer_size(false, use_mki, mki_index)
+    }
+
+    pub fn get_stream_roc(&self, ssrc: u32) -> Result<RolloverCounter, Error> {
+        let stream_index = match self.get_stream(ssrc) {
+            Some(x) => x,
+            None => return Err(Error::NoContext),
+        };
+
+        Ok(self.streams[stream_index].get_roc())
+    }
+
+    pub fn set_stream_roc(&mut self, ssrc: u32, roc: RolloverCounter) -> Result<(), Error> {
+        let stream_index = match self.get_stream(ssrc) {
+            Some(x) => x,
+            None => return Err(Error::NoContext),
+        };
+
+        self.streams[stream_index].set_roc(roc)
     }
 }
 

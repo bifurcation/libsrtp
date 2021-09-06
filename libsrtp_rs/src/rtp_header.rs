@@ -4,7 +4,7 @@ use crate::srtp::{Error, SessionKeys};
 use packed_struct::prelude::*;
 use std::ops::Range;
 
-trait PackedSize {
+pub trait PackedSize {
     const PACKED_SIZE: usize;
 }
 

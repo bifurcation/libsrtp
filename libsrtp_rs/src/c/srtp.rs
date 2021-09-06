@@ -550,12 +550,12 @@ pub extern "C" fn srtp_unprotect_rtcp_mki(
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_set_user_data(ctx: srtp_t, data: *mut c_void) {
+pub extern "C" fn srtp_set_user_data(_session_ptr: srtp_t, _data: *mut c_void) {
     // TODO
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_get_user_data(ctx: srtp_t) -> *mut c_void {
+pub extern "C" fn srtp_get_user_data(_session_ptr: srtp_t) -> *mut c_void {
     std::ptr::null_mut() // TODO
 }
 
