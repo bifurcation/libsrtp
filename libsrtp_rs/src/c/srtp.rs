@@ -128,7 +128,7 @@ fn split_key_for_cipher<'a>(key_ptr: *mut c_uchar, id: CipherTypeID) -> (&'a [u8
     let key_size = id.key_size();
     let salt_size = id.salt_size();
 
-    let salt_ptr = unsafe { key_ptr.offset(key_size as isize) };
+    let salt_ptr = unsafe { key_ptr.add(key_size) };
 
     let key = unsafe { std::slice::from_raw_parts(key_ptr, key_size) };
     let salt = unsafe { std::slice::from_raw_parts(salt_ptr, salt_size) };
@@ -147,7 +147,7 @@ fn master_key_for_cipher(mk: &srtp_master_key_t, id: CipherTypeID) -> MasterKey 
 
 impl Into<Policy> for srtp_policy_t {
     fn into(self) -> Policy {
-        let have_key = self.key.is_null();
+        let have_key = !self.key.is_null();
         let num_master_keys = if have_key {
             1usize
         } else {
@@ -585,7 +585,7 @@ pub extern "C" fn srtp_set_stream_roc(session_ptr: srtp_t, ssrc: u32, roc: u32) 
 }
 
 #[no_mangle]
-extern "C" fn srtp_get_stream_roc(session_ptr: srtp_t, ssrc: u32, roc_ptr: *mut u32) -> Error {
+pub extern "C" fn srtp_get_stream_roc(session_ptr: srtp_t, ssrc: u32, roc_ptr: *mut u32) -> Error {
     let session = unsafe { session_ptr.as_mut().unwrap() };
     let roc = match session.get_stream_roc(ssrc) {
         Ok(x) => x,
@@ -593,6 +593,20 @@ extern "C" fn srtp_get_stream_roc(session_ptr: srtp_t, ssrc: u32, roc_ptr: *mut 
     };
     unsafe { roc_ptr.write(roc) };
     Error::Ok
+}
+
+// XXX(RLB) This function is not included in srtp.h, but it is required by srtp_driver.c.  The
+// result is only used to compare to NULL, so we return invalid pointers NULL or 0x00000001, so
+// that either way, an attempt to dereference will fail.
+#[no_mangle]
+pub extern "C" fn srtp_get_stream(session_ptr: srtp_t, ssrc: u32) -> *const c_void {
+    let session = unsafe { session_ptr.as_mut().unwrap() };
+    let null: *const c_void = std::ptr::null();
+    let non_null: *const c_void = unsafe { null.add(1) };
+    match session.get_stream(ssrc) {
+        Some(_) => non_null,
+        None => null,
+    }
 }
 
 //
@@ -705,7 +719,7 @@ pub extern "C" fn srtp_append_salt_to_key(
     bytes_in_salt: c_uint,
 ) {
     unsafe {
-        let salt_dst = key.offset(bytes_in_key as isize);
+        let salt_dst = key.add(bytes_in_key as usize);
         std::ptr::copy_nonoverlapping(salt_dst, salt, bytes_in_salt as usize);
     }
 }

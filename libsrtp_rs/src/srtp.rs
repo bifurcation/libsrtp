@@ -837,7 +837,7 @@ impl Context {
         }
     }
 
-    fn get_stream(&self, ssrc: u32) -> Option<usize> {
+    pub fn get_stream(&self, ssrc: u32) -> Option<usize> {
         for i in 0..self.streams.len() {
             match self.streams[i].ssrc.value() {
                 Ok(x) if x == ssrc => return Some(i),

@@ -124,9 +124,9 @@ if(BUILD_WITH_SANITIZERS AND NOT WIN32)
   set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -fno-omit-frame-pointer -fsanitize=${SANITIZERS}")
 endif()
 
-set(SOURCES_C
-  srtp/srtp.c
-)
+if(NOT ENABLE_RUST)
+  set(SOURCES_C srtp/srtp.c)
+endif()
 
 set(CIPHERS_SOURCES_C)
 if(NOT ENABLE_RUST)
@@ -360,7 +360,7 @@ if(TEST_APPS)
   target_link_libraries(matrix_driver srtp2)
   add_test(matrix_driver matrix_driver -v)
 
-  if(NOT (BUILD_SHARED_LIBS AND WIN32))
+  if((NOT (BUILD_SHARED_LIBS AND WIN32)) AND (NOT RUST))
     add_executable(test_srtp test/test_srtp.c)
     if (ENABLE_RUST)
       target_include_directories(test_srtp PRIVATE ${LIBSRTP_RS_INCLUDE_DIR})
