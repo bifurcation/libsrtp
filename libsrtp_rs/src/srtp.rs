@@ -1092,17 +1092,18 @@ impl Context {
     }
 
     fn trailer_size(&self, is_rtcp: bool, use_mki: bool, mki_index: usize) -> Result<usize, Error> {
-        // XXX(RLB) This is what the C code appears to intend, but does not actually do.  That
-        // code examines the tempalte and gets the template's trailer size, but then is missing a
-        // return so that it always iterates the streams and returns the max.
-        if self.stream_template.is_some() {
+        if self.stream_template.is_none() && self.streams.is_empty() {
+            return Err(Error::BadParam);
+        }
+
+        let mut size = 0;
+        if self.streams.is_empty() {
             let template = self.stream_template.as_ref().unwrap();
-            return template.trailer_size(is_rtcp, use_mki, mki_index);
+            size = template.trailer_size(is_rtcp, use_mki, mki_index)?;
         }
 
         // XXX(RLB) We could use streams.iter().map().fold(0, cmp::max) if Stream::trailer_size
         // weren't fallible.  But as it is, we have to iterate / max manually
-        let mut size = 0;
         for stream in &self.streams {
             size = cmp::max(size, stream.trailer_size(is_rtcp, use_mki, mki_index)?);
         }
@@ -1113,12 +1114,7 @@ impl Context {
         self.trailer_size(false, use_mki, mki_index)
     }
 
-    pub fn srtcp_trailer_size(
-        &self,
-        ssrc: u32,
-        use_mki: bool,
-        mki_index: usize,
-    ) -> Result<usize, Error> {
+    pub fn srtcp_trailer_size(&self, use_mki: bool, mki_index: usize) -> Result<usize, Error> {
         self.trailer_size(false, use_mki, mki_index)
     }
 

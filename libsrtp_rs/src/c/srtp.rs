@@ -10,32 +10,12 @@ use crate::c::crypto_kernel::{
 use crate::c::{just_error, zero_and_drop};
 use crate::crypto_kernel::{AuthTypeID, CipherTypeID};
 use crate::policy::{CryptoPolicy, MasterKey, Policy, ProfileID, SecurityServices, Ssrc};
+use crate::replay::RolloverCounter;
 use crate::srtp::{Context, Error};
 use cstr::cstr;
 use std::convert::TryInto;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_ulong, c_void};
-
-// TODO: These can probably be deleted
-pub const SRTP_MAX_KEY_LEN: u32 = 64;
-pub const SRTP_MAX_TAG_LEN: u32 = 16;
-pub const SRTP_MAX_MKI_LEN: u32 = 128;
-pub const SRTP_MAX_TRAILER_LEN: u32 = 144;
-pub const SRTP_MAX_NUM_MASTER_KEYS: u32 = 16;
-pub const SRTP_SALT_LEN: u32 = 14;
-pub const SRTP_AEAD_SALT_LEN: u32 = 12;
-pub const SRTP_AES_128_KEY_LEN: u32 = 16;
-pub const SRTP_AES_192_KEY_LEN: u32 = 24;
-pub const SRTP_AES_256_KEY_LEN: u32 = 32;
-pub const SRTP_AES_ICM_128_KEY_LEN_WSALT: u32 = 30;
-pub const SRTP_AES_ICM_192_KEY_LEN_WSALT: u32 = 38;
-pub const SRTP_AES_ICM_256_KEY_LEN_WSALT: u32 = 46;
-pub const SRTP_AES_GCM_128_KEY_LEN_WSALT: u32 = 28;
-pub const SRTP_AES_GCM_192_KEY_LEN_WSALT: u32 = 36;
-pub const SRTP_AES_GCM_256_KEY_LEN_WSALT: u32 = 44;
-pub const SRTCP_E_BIT: u32 = 2147483648;
-pub const SRTCP_E_BYTE_BIT: u32 = 128;
-pub const SRTCP_INDEX_MASK: u32 = 2147483647;
 
 //
 // Profile
@@ -361,7 +341,7 @@ pub extern "C" fn srtp_create(session_ptr: *mut srtp_t, policy_ptr: *const srtp_
 
     let ctx_ptr = Box::into_raw(Box::new(ctx));
     unsafe { session_ptr.write(ctx_ptr) };
-    Error::Ok // TODO
+    Error::Ok
 }
 
 #[no_mangle]
@@ -378,8 +358,9 @@ pub extern "C" fn srtp_add_stream(session_ptr: srtp_t, policy_ptr: *const srtp_p
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_remove_stream(session: srtp_t, ssrc: c_uint) -> Error {
-    Error::Ok // TODO
+pub extern "C" fn srtp_remove_stream(session_ptr: srtp_t, ssrc: c_uint) -> Error {
+    let session = unsafe { session_ptr.as_mut().unwrap() };
+    just_error(session.remove_stream(ssrc as u32))
 }
 
 #[no_mangle]
@@ -561,32 +542,57 @@ pub extern "C" fn srtp_get_user_data(_session_ptr: srtp_t) -> *mut c_void {
 
 #[no_mangle]
 pub extern "C" fn srtp_get_protect_trailer_length(
-    session: srtp_t,
+    session_ptr: srtp_t,
     use_mki: u32,
     mki_index: u32,
-    length: *mut u32,
+    len_ptr: *mut u32,
 ) -> Error {
-    Error::Ok // TODO
+    let session = unsafe { session_ptr.as_mut().unwrap() };
+    let use_mki = use_mki != 0;
+    let mki_index = mki_index as usize;
+
+    let trailer_size = match session.srtp_trailer_size(use_mki, mki_index) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+    unsafe { len_ptr.write(trailer_size as u32) };
+    Error::Ok
 }
 
 #[no_mangle]
 pub extern "C" fn srtp_get_protect_rtcp_trailer_length(
-    session: srtp_t,
+    session_ptr: srtp_t,
     use_mki: u32,
     mki_index: u32,
-    length: *mut u32,
+    len_ptr: *mut u32,
 ) -> Error {
-    Error::Ok // TODO
+    let session = unsafe { session_ptr.as_mut().unwrap() };
+    let use_mki = use_mki != 0;
+    let mki_index = mki_index as usize;
+
+    let trailer_size = match session.srtcp_trailer_size(use_mki, mki_index) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+    unsafe { len_ptr.write(trailer_size as u32) };
+    Error::Ok
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_set_stream_roc(session: srtp_t, ssrc: u32, roc: u32) -> Error {
-    Error::Ok // TODO
+pub extern "C" fn srtp_set_stream_roc(session_ptr: srtp_t, ssrc: u32, roc: u32) -> Error {
+    let session = unsafe { session_ptr.as_mut().unwrap() };
+    just_error(session.set_stream_roc(ssrc, roc as RolloverCounter))
 }
 
 #[no_mangle]
-extern "C" fn srtp_get_stream_roc(session: srtp_t, ssrc: u32, roc: *mut u32) -> Error {
-    Error::Ok // TODO
+extern "C" fn srtp_get_stream_roc(session_ptr: srtp_t, ssrc: u32, roc_ptr: *mut u32) -> Error {
+    let session = unsafe { session_ptr.as_mut().unwrap() };
+    let roc = match session.get_stream_roc(ssrc) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+    unsafe { roc_ptr.write(roc) };
+    Error::Ok
 }
 
 //
