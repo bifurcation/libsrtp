@@ -1444,6 +1444,9 @@ srtp_err_status_t srtcp_test(const srtp_policy_t *policy, int mki_index)
 
 srtp_err_status_t srtp_session_print_policy(srtp_t srtp)
 {
+// XXX(RLB) This code relies on access to internals of strp_t, which is not
+// allowed.
+#if 0
     char *serv_descr[4] = { "none", "confidentiality", "authentication",
                             "confidentiality and authentication" };
     char *direction[3] = { "unknown", "outbound", "inbound" };
@@ -1537,6 +1540,9 @@ srtp_err_status_t srtp_session_print_policy(srtp_t srtp)
         stream = stream->next;
     }
     return srtp_err_status_ok;
+#else
+    return srtp_err_status_ok;
+#endif // 0
 }
 
 srtp_err_status_t srtp_print_policy(const srtp_policy_t *policy)

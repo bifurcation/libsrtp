@@ -218,7 +218,7 @@ impl CryptoPolicy {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Ssrc {
     AnyInbound,
     AnyOutbound,

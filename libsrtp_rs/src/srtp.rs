@@ -136,11 +136,20 @@ impl SessionKeys {
     ) -> Result<Self, Error> {
         // Set up a KDF and cipher factory
         // XXX(RLB) Apparently we can't use key.salt directly, because it its length is expected to
-        // match the salt size for the RTP cipher.
+        // match the salt size for the RTP cipher.  In general, this logic could use cleanup.
         let kdf_cipher_type = KDF::cipher_type(rtp.cipher_type, rtcp.cipher_type);
-        let mut kdf_salt = [0u8; 14];
+        let kdf_key_size = kdf_cipher_type.key_size();
+        let kdf_salt_size = kdf_cipher_type.salt_size();
+
+        let mut kdf_key_buf = [0u8; 64];
+        let kdf_key = &mut kdf_key_buf[..kdf_key_size];
+        kdf_key[..key.key.len()].copy_from_slice(&key.key);
+
+        let mut kdf_salt_buf = [0u8; 14];
+        let kdf_salt = &mut kdf_salt_buf[..kdf_salt_size];
         kdf_salt[..key.salt.len()].copy_from_slice(&key.salt);
-        let kdf = KDF::new(kernel, kdf_cipher_type, &key.key, &kdf_salt)?;
+
+        let kdf = KDF::new(kernel, kdf_cipher_type, kdf_key, kdf_salt)?;
         let factory = CipherFactory::new(kernel, &kdf);
 
         // Set up the RTP cipher
@@ -732,8 +741,8 @@ impl Stream {
         self.rtp_rdbx.roc()
     }
 
-    fn set_roc(&mut self, roc: RolloverCounter) -> Result<(), Error> {
-        self.rtp_rdbx.set_roc(roc)
+    fn set_roc(&mut self, roc: RolloverCounter) {
+        self.pending_roc = Some(roc);
     }
 }
 
@@ -1115,7 +1124,7 @@ impl Context {
     }
 
     pub fn srtcp_trailer_size(&self, use_mki: bool, mki_index: usize) -> Result<usize, Error> {
-        self.trailer_size(false, use_mki, mki_index)
+        self.trailer_size(true, use_mki, mki_index)
     }
 
     pub fn get_stream_roc(&self, ssrc: u32) -> Result<RolloverCounter, Error> {
@@ -1133,7 +1142,8 @@ impl Context {
             None => return Err(Error::NoContext),
         };
 
-        self.streams[stream_index].set_roc(roc)
+        self.streams[stream_index].set_roc(roc);
+        Ok(())
     }
 }
 

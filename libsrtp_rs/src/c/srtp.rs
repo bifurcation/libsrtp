@@ -137,11 +137,23 @@ fn split_key_for_cipher<'a>(key_ptr: *mut c_uchar, id: CipherTypeID) -> (&'a [u8
 
 fn master_key_for_cipher(mk: &srtp_master_key_t, id: CipherTypeID) -> MasterKey {
     let (key, salt) = split_key_for_cipher(mk.key, id);
-    let id = unsafe { std::slice::from_raw_parts(mk.mki_id, mk.mki_size as usize) };
+    let mki_id = unsafe { std::slice::from_raw_parts(mk.mki_id, mk.mki_size as usize) };
     MasterKey {
         key: key.into(),
         salt: salt.into(),
-        id: id.into(),
+        id: mki_id.into(),
+    }
+}
+
+impl srtp_policy_t {
+    fn valid(&self) -> bool {
+        // Exactly one of `key` and `keys` is populated
+        let key_valid = !self.key.is_null() ^ (!self.keys.is_null() && self.num_master_keys > 0);
+
+        // EKT is not requested
+        let ekt_valid = self.deprecated_ekt.is_null();
+
+        key_valid && ekt_valid
     }
 }
 
@@ -177,7 +189,7 @@ impl Into<Policy> for srtp_policy_t {
             let id = self.rtp.cipher_type;
             let mks = unsafe { std::slice::from_raw_parts(self.keys, num_master_keys) };
             for mk in mks {
-                let mk_ref = unsafe { mk.as_ref().unwrap() };
+                let mk_ref = unsafe { (*mk).as_ref().unwrap() };
                 policy.keys.push(master_key_for_cipher(mk_ref, id));
             }
         }
@@ -311,21 +323,28 @@ extern "C" fn srtp_crypto_policy_set_from_profile_for_rtcp(
 
 pub type srtp_t = *mut Context;
 
-fn read_policy_list(policy: *const srtp_policy_t) -> Vec<Policy> {
+fn read_policy_list(policy: *const srtp_policy_t) -> Result<Vec<Policy>, Error> {
     let mut policies: Vec<Policy> = Vec::new();
     let mut policy_ptr = policy;
     while !policy_ptr.is_null() {
         let policy_val = unsafe { policy_ptr.read() };
+        if !policy_val.valid() {
+            return Err(Error::BadParam);
+        }
+
         policies.push(policy_val.into());
         policy_ptr = policy_val.next;
     }
-    policies
+    Ok(policies)
 }
 
 #[no_mangle]
 pub extern "C" fn srtp_create(session_ptr: *mut srtp_t, policy_ptr: *const srtp_policy_t) -> Error {
     // Read the linked list of policies into a Vec
-    let policies = read_policy_list(policy_ptr);
+    let policies = match read_policy_list(policy_ptr) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
 
     // Get a reference to the singleton kernel, failing if not initialized
     let kernel = match unsafe { singleton_kernel.as_ref() } {
@@ -359,14 +378,19 @@ pub extern "C" fn srtp_add_stream(session_ptr: srtp_t, policy_ptr: *const srtp_p
 
 #[no_mangle]
 pub extern "C" fn srtp_remove_stream(session_ptr: srtp_t, ssrc: c_uint) -> Error {
+    // C test code presents the SSRCs post-htonl()
+    let ssrc = u32::from_be(ssrc);
     let session = unsafe { session_ptr.as_mut().unwrap() };
     just_error(session.remove_stream(ssrc as u32))
 }
 
 #[no_mangle]
-pub extern "C" fn srtp_update(session_ptr: srtp_t, policy: *const srtp_policy_t) -> Error {
+pub extern "C" fn srtp_update(session_ptr: srtp_t, policy_ptr: *const srtp_policy_t) -> Error {
     let session = unsafe { session_ptr.as_mut().unwrap() };
-    let policies = read_policy_list(policy);
+    let policies = match read_policy_list(policy_ptr) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
     let kernel = match unsafe { singleton_kernel.as_ref() } {
         Some(x) => x,
         None => return Error::Fail,
@@ -600,6 +624,8 @@ pub extern "C" fn srtp_get_stream_roc(session_ptr: srtp_t, ssrc: u32, roc_ptr: *
 // that either way, an attempt to dereference will fail.
 #[no_mangle]
 pub extern "C" fn srtp_get_stream(session_ptr: srtp_t, ssrc: u32) -> *const c_void {
+    // C test code presents the SSRCs post-htonl()
+    let ssrc = u32::from_be(ssrc);
     let session = unsafe { session_ptr.as_mut().unwrap() };
     let null: *const c_void = std::ptr::null();
     let non_null: *const c_void = unsafe { null.add(1) };

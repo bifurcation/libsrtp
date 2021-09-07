@@ -38,16 +38,12 @@ impl KDF {
         key: &[u8],
         salt: &[u8],
     ) -> Result<Self, Error> {
-        if salt.len() != constants::SALT_LEN {
-            return Err(Error::BadParam);
-        }
-
         let mut kdf = KDF {
             salt: [0; 16],
             cipher: kernel.cipher(cipher_id, key, salt)?,
         };
 
-        kdf.salt[..constants::SALT_LEN].copy_from_slice(salt);
+        kdf.salt[..salt.len()].copy_from_slice(salt);
         Ok(kdf)
     }
 

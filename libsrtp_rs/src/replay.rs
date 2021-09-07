@@ -143,27 +143,22 @@ impl ExtSeqNum for ExtendedSequenceNumber {
 
     fn estimate(&self, seq: SequenceNumber) -> (ExtendedSequenceNumber, i32) {
         let local_roc = self.roc();
-        let local_seq = self.seq() as i32;
+        let local_seq: i32 = self.seq().into();
 
-        let guess_roc: RolloverCounter;
-        let mut difference: i32 = seq as i32;
-        if local_seq < SEQ_NUM_MEDIAN {
-            if ((seq as i32) > SEQ_NUM_MEDIAN + local_seq) && (local_roc > 0) {
-                guess_roc = local_roc - 1;
-                difference -= local_seq + SEQ_NUM_MAX;
+        let iseq: i32 = seq.into();
+        let (guess_roc, difference) = if local_seq < SEQ_NUM_MEDIAN {
+            if (iseq > SEQ_NUM_MEDIAN + local_seq) && (local_roc > 0) {
+                (local_roc - 1, iseq - local_seq - SEQ_NUM_MAX)
             } else {
-                guess_roc = local_roc;
-                difference -= local_seq;
+                (local_roc, iseq - local_seq)
             }
         } else {
-            if (seq as i32) < local_seq - SEQ_NUM_MEDIAN {
-                guess_roc = local_roc + 1;
-                difference -= local_seq - SEQ_NUM_MAX;
+            if iseq < local_seq - SEQ_NUM_MEDIAN {
+                (local_roc + 1, iseq - local_seq + SEQ_NUM_MAX)
             } else {
-                guess_roc = local_roc;
-                difference -= local_seq;
+                (local_roc, iseq - local_seq)
             }
-        }
+        };
 
         (
             ExtendedSequenceNumber::from_roc_seq(guess_roc, seq),
@@ -215,6 +210,10 @@ impl BitVector {
     fn set(&mut self, bit: usize) {
         assert!(bit < self.bit_length);
         self.words[bit / Self::BITS_PER_WORD] |= 1 << (bit % Self::BITS_PER_WORD);
+    }
+
+    fn clear(&mut self) {
+        self.words.fill(0);
     }
 
     fn shift(&mut self, shift: usize) {
@@ -345,6 +344,7 @@ impl ExtendedReplayDB {
             return Err(Error::ReplayOld);
         }
 
+        self.bitmask.clear();
         self.index.set_roc(roc);
         Ok(())
     }
