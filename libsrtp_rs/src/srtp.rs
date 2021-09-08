@@ -1487,57 +1487,110 @@ mod test {
         Ok(())
     }
 
-    // SRTP validation test from srtp_driver.c
+    // SRTP validation tests from srtp_driver.c
+    struct CValidationTest {
+        crypto_policy: CryptoPolicy,
+        key: &'static [u8],
+        salt: &'static [u8],
+        srtp_pt: &'static [u8],
+        srtp_ct: &'static [u8],
+        srtcp_pt: &'static [u8],
+        srtcp_ct: &'static [u8],
+    }
+
+    impl CValidationTest {
+        fn validate(&self) -> Result<(), Error> {
+            let policies = [Policy {
+                ssrc: Ssrc::AnyOutbound,
+                rtp: self.crypto_policy,
+                rtcp: self.crypto_policy,
+                keys: vec![MasterKey {
+                    key: self.key.to_vec(),
+                    salt: self.salt.to_vec(),
+                    id: vec![],
+                }],
+                window_size: 128,
+                allow_repeat_tx: false,
+                xtn_headers_to_encrypt: vec![],
+            }];
+
+            let kernel = CryptoKernel::default()?;
+            let mut ctx_send = Context::new(&kernel, &policies)?;
+            let mut ctx_recv = Context::new(&kernel, &policies)?;
+
+            // SRTP encrypt
+            let pt_size = self.srtp_pt.len();
+            let mut buffer = [0u8; 80];
+            buffer[..pt_size].copy_from_slice(&self.srtp_pt);
+            let ct_size = ctx_send.srtp_protect(&mut buffer, pt_size)?;
+            assert_eq!(self.srtp_ct, &buffer[..ct_size]);
+
+            // SRTP decrypt
+            let pt_size = ctx_recv.srtp_unprotect(&mut buffer[..ct_size])?;
+            assert_eq!(self.srtp_pt, &buffer[..pt_size]);
+
+            // SRTCP encrypt
+            buffer.fill(0);
+            let pt_size = self.srtcp_pt.len();
+            buffer[..pt_size].copy_from_slice(&self.srtcp_pt);
+            let ct_size = ctx_send.srtcp_protect(&mut buffer, pt_size)?;
+            assert_eq!(self.srtcp_ct, &buffer[..ct_size]);
+
+            // SRTCP decrypt
+            let pt_size = ctx_recv.srtcp_unprotect(&mut buffer[..ct_size])?;
+            assert_eq!(self.srtcp_pt, &buffer[..pt_size]);
+
+            Ok(())
+        }
+    }
+
+    const C_VALIDATION_TESTS: &[CValidationTest] = &[
+        CValidationTest {
+            crypto_policy: CryptoPolicy::RTP_DEFAULT,
+            key: &hex!("e1f97a0d3e018be0d64fa32c06de4139"),
+            salt: &hex!("0ec675ad498afeebb6960b3aabe6"),
+            srtp_pt: &hex!("800f1234decafbadcafebabeabababababababababababababababab"),
+            srtp_ct: &hex!(
+                "800f1234decafbadcafebabe4e55dc4ce79978d88ca4d215949d2402b78d6acc99ea179b8dbb"
+            ),
+            srtcp_pt: &hex!("81c8000bcafebabeabababababababababababababababab"),
+            srtcp_ct: &hex!(
+                "81c8000bcafebabe7128035be487b9bdbef89041f977a5a880000001993e08cd54d6c1230798"
+            ),
+        },
+        CValidationTest {
+            crypto_policy: CryptoPolicy::NULL_CIPHER_HMAC_SHA1_80,
+            key: &hex!("e1f97a0d3e018be0d64fa32c06de4139"),
+            salt: &hex!("0ec675ad498afeebb6960b3aabe6"),
+            srtp_pt: &hex!("800f1234decafbadcafebabeabababababababababababababababab"),
+            srtp_ct: &hex!(
+                "800f1234decafbadcafebabeabababababababababababababababababa136270b679134ce9b"
+            ),
+            srtcp_pt: &hex!("81c8000bcafebabeabababababababababababababababab"),
+            srtcp_ct: &hex!(
+                "81c8000bcafebabeabababababababababababababababab00000001fe88c7fdfd37ebce615d"
+            ),
+        },
+        CValidationTest {
+            crypto_policy: CryptoPolicy::AES_GCM_128,
+            key: &hex!("000102030405060708090a0b0c0d0e0f"),
+            salt: &hex!("a0a1a2a3a4a5a6a7a8a9aaab"),
+            srtp_pt: &hex!("800f1234decafbadcafebabeabababababababababababababababab"),
+            srtp_ct: &hex!(
+                "800f1234decafbadcafebabec5002ede04cfdd2eb91159e0880aa06ed2976826f796b201df3131a127e8a392"
+            ),
+            srtcp_pt: &hex!("81c8000bcafebabeabababababababababababababababab"),
+            srtcp_ct: &hex!(
+                "81c8000bcafebabec98b8b5df0392a55852b6c21ac8e7025c52c6fbea2b3b446ea31123ba88ce61e80000001"
+            ),
+        },
+    ];
+
     #[test]
-    fn test_rtp_validation_c() -> Result<(), Error> {
-        let srtp_pt = hex!("800f1234decafbadcafebabeabababababababababababababababab");
-        let srtp_ct =
-            hex!("800f1234decafbadcafebabe4e55dc4ce79978d88ca4d215949d2402b78d6acc99ea179b8dbb");
-
-        let srtcp_pt = hex!("81c8000bcafebabeabababababababababababababababab");
-        let srtcp_ct =
-            hex!("81c8000bcafebabe7128035be487b9bdbef89041f977a5a880000001993e08cd54d6c1230798");
-
-        let policies = [Policy {
-            ssrc: Ssrc::AnyOutbound,
-            rtp: CryptoPolicy::RTP_DEFAULT,
-            rtcp: CryptoPolicy::RTCP_DEFAULT,
-            keys: vec![MasterKey {
-                key: KEY.to_vec(),
-                salt: SALT.to_vec(),
-                id: MKI.to_vec(),
-            }],
-            window_size: 128,
-            allow_repeat_tx: false,
-            xtn_headers_to_encrypt: vec![],
-        }];
-
-        let kernel = CryptoKernel::default()?;
-        let mut ctx_send = Context::new(&kernel, &policies)?;
-        let mut ctx_recv = Context::new(&kernel, &policies)?;
-
-        // SRTP encrypt
-        let pt_size = srtp_pt.len();
-        let mut buffer = [0u8; 80];
-        buffer[..pt_size].copy_from_slice(&srtp_pt);
-        let ct_size = ctx_send.srtp_protect(&mut buffer, pt_size)?;
-        assert_eq!(srtp_ct, buffer[..ct_size]);
-
-        // SRTP decrypt
-        let pt_size = ctx_recv.srtp_unprotect(&mut buffer[..ct_size])?;
-        assert_eq!(srtp_pt, buffer[..pt_size]);
-
-        // SRTCP encrypt
-        buffer.fill(0);
-        let pt_size = srtcp_pt.len();
-        buffer[..pt_size].copy_from_slice(&srtcp_pt);
-        let ct_size = ctx_send.srtcp_protect(&mut buffer, pt_size)?;
-        assert_eq!(srtcp_ct, buffer[..ct_size]);
-
-        // SRTCP decrypt
-        let pt_size = ctx_recv.srtcp_unprotect(&mut buffer[..ct_size])?;
-        assert_eq!(srtcp_pt, buffer[..pt_size]);
-
+    fn test_c_validation() -> Result<(), Error> {
+        for test in C_VALIDATION_TESTS {
+            test.validate()?
+        }
         Ok(())
     }
 }
