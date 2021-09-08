@@ -6,7 +6,7 @@
 use crate::c::auth::{make_auth_t, srtp_auth_t};
 use crate::c::cipher::{make_cipher_t, srtp_cipher_t};
 use crate::c::err::{srtp_debug_module_t, srtp_err_reporting_init};
-use crate::crypto_kernel::{AuthTypeID, CipherTypeID, CryptoKernel};
+use crate::crypto::{AuthTypeID, CipherTypeID, CryptoKernel};
 use crate::srtp::Error;
 use std::os::raw::{c_char, c_int};
 

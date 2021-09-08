@@ -5,9 +5,9 @@
 
 use crate::c::err::srtp_debug_module_t;
 use crate::c::{just_error, zero_and_drop};
-use crate::crypto_kernel::{Auth, AuthType, AuthTypeID};
-use crate::hmac::NativeHMAC;
-use crate::null_auth::NullAuth;
+use crate::crypto::hmac_sha1::HmacSha1;
+use crate::crypto::null_auth::NullAuth;
+use crate::crypto::{Auth, AuthType, AuthTypeID};
 use crate::srtp::Error;
 use cstr::cstr;
 use hex_literal::hex;
@@ -231,7 +231,7 @@ pub static srtp_null_auth: srtp_auth_type_t = srtp_auth_type_t {
 // HMAC Auth
 //
 extern "C" fn hmac_alloc(ap: *mut *mut srtp_auth_t, key_len: c_int, out_len: c_int) -> Error {
-    let auth_type = Box::new(NativeHMAC {});
+    let auth_type = Box::new(HmacSha1 {});
     auth_alloc(auth_type, &srtp_hmac, ap, key_len, out_len, 0)
 }
 

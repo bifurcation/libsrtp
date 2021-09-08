@@ -1,4 +1,4 @@
-use crate::crypto_test;
+use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -6,90 +6,28 @@ use std::ops::Range;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
-use crate::aes_gcm::NativeAesGcm;
-use crate::aes_icm::NativeAesIcm;
-use crate::hmac::NativeHMAC;
-use crate::null_auth::NullAuth;
-use crate::null_cipher::NullCipher;
-use crate::replay::ExtendedSequenceNumber;
-
 //
-// Constants
+// Submodules
 //
-pub mod constants {
-    use super::CipherTypeID;
-    use super::ExtensionCipherTypeID;
+pub(crate) mod constants;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum AesKeySize {
-        Aes128 = 16,
-        Aes192 = 24,
-        Aes256 = 32,
+pub(crate) mod aes_gcm;
+pub(crate) mod aes_icm;
+pub(crate) mod hmac_sha1;
+pub(crate) mod null_auth;
+pub(crate) mod null_cipher;
+mod test;
+
+use self::aes_gcm::AesGcm;
+use self::aes_icm::AesIcm;
+use self::hmac_sha1::HmacSha1;
+use self::null_auth::NullAuth;
+use self::null_cipher::NullCipher;
+
+pub(crate) fn xor_eq(a: &mut [u8], b: &[u8]) {
+    for (b1, b2) in a.iter_mut().zip(b.iter()) {
+        *b1 ^= *b2;
     }
-
-    impl AesKeySize {
-        pub fn as_usize(&self) -> usize {
-            match self {
-                AesKeySize::Aes128 => AES_128_KEY_LEN,
-                AesKeySize::Aes192 => AES_192_KEY_LEN,
-                AesKeySize::Aes256 => AES_256_KEY_LEN,
-            }
-        }
-
-        pub fn as_icm_id(&self) -> CipherTypeID {
-            match self {
-                AesKeySize::Aes128 => CipherTypeID::AesIcm128,
-                AesKeySize::Aes192 => CipherTypeID::AesIcm192,
-                AesKeySize::Aes256 => CipherTypeID::AesIcm256,
-            }
-        }
-
-        pub fn as_gcm_id(&self) -> CipherTypeID {
-            match self {
-                AesKeySize::Aes128 => CipherTypeID::AesGcm128,
-                AesKeySize::Aes192 => panic!("Invalid GCM key size"),
-                AesKeySize::Aes256 => CipherTypeID::AesGcm256,
-            }
-        }
-
-        pub fn as_stream_icm_id(&self) -> ExtensionCipherTypeID {
-            match self {
-                AesKeySize::Aes128 => ExtensionCipherTypeID::AesIcm128,
-                AesKeySize::Aes192 => ExtensionCipherTypeID::AesIcm192,
-                AesKeySize::Aes256 => ExtensionCipherTypeID::AesIcm256,
-            }
-        }
-    }
-
-    impl Into<usize> for AesKeySize {
-        fn into(self) -> usize {
-            self.as_usize()
-        }
-    }
-
-    pub const NULL_CIPHER_SALT_LEN: usize = 0;
-    pub const SALT_LEN: usize = 14;
-    pub const AEAD_SALT_LEN: usize = 12;
-
-    pub const NULL_CIPHER_KEY_LEN: usize = 0;
-    pub const AES_128_KEY_LEN: usize = 16;
-    pub const AES_192_KEY_LEN: usize = 24;
-    pub const AES_256_KEY_LEN: usize = 32;
-
-    pub const NULL_AUTH_KEY_LEN: usize = 0;
-    pub const HMAC_SHA1_KEY_LEN: usize = 20;
-
-    pub const AES_ICM_128_KEY_LEN_WSALT: usize = SALT_LEN + AES_128_KEY_LEN;
-    pub const AES_ICM_192_KEY_LEN_WSALT: usize = SALT_LEN + AES_192_KEY_LEN;
-    pub const AES_ICM_256_KEY_LEN_WSALT: usize = SALT_LEN + AES_256_KEY_LEN;
-
-    pub const AES_GCM_128_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_128_KEY_LEN;
-    pub const AES_GCM_192_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_192_KEY_LEN;
-    pub const AES_GCM_256_KEY_LEN_WSALT: usize = AEAD_SALT_LEN + AES_256_KEY_LEN;
-
-    pub const NULL_CIPHER_NONCE_SIZE: usize = 0;
-    pub const AES_ICM_NONCE_SIZE: usize = 16;
-    pub const AES_GCM_NONCE_SIZE: usize = 12;
 }
 
 //
@@ -408,38 +346,38 @@ impl CryptoKernel {
 
         // Extension cipher types
         kernel.load_xtn_cipher_type(Box::new(NullCipher {}))?;
-        kernel.load_xtn_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes128)))?;
-        kernel.load_xtn_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes192)))?;
-        kernel.load_xtn_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes256)))?;
+        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes128)))?;
+        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes192)))?;
+        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes256)))?;
 
         // Cipher types
         kernel.load_cipher_type(Box::new(NullCipher {}))?;
-        kernel.load_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes128)))?;
-        kernel.load_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes192)))?;
-        kernel.load_cipher_type(Box::new(NativeAesIcm::new(constants::AesKeySize::Aes256)))?;
-        kernel.load_cipher_type(Box::new(NativeAesGcm::new(constants::AesKeySize::Aes128)?))?;
-        kernel.load_cipher_type(Box::new(NativeAesGcm::new(constants::AesKeySize::Aes256)?))?;
+        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes128)))?;
+        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes192)))?;
+        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes256)))?;
+        kernel.load_cipher_type(Box::new(AesGcm::new(constants::AesKeySize::Aes128)?))?;
+        kernel.load_cipher_type(Box::new(AesGcm::new(constants::AesKeySize::Aes256)?))?;
 
         // Auth types
         kernel.load_auth_type(Box::new(NullAuth {}))?;
-        kernel.load_auth_type(Box::new(NativeHMAC {}))?;
+        kernel.load_auth_type(Box::new(HmacSha1 {}))?;
         Ok(kernel)
     }
 
     pub fn load_xtn_cipher_type(&mut self, ect: Box<dyn ExtensionCipherType>) -> Result<(), Error> {
-        crypto_test::xtn_cipher(ect.as_ref())?;
+        test::xtn_cipher(ect.as_ref())?;
         self.xtn_cipher_types.insert(ect.xtn_id(), ect);
         Ok(())
     }
 
     pub fn load_cipher_type(&mut self, ct: Box<dyn CipherType>) -> Result<(), Error> {
-        crypto_test::cipher(ct.as_ref())?;
+        test::cipher(ct.as_ref())?;
         self.cipher_types.insert(ct.id(), ct);
         Ok(())
     }
 
     pub fn load_auth_type(&mut self, at: Box<dyn AuthType>) -> Result<(), Error> {
-        crypto_test::auth(at.as_ref())?;
+        test::auth(at.as_ref())?;
         self.auth_types.insert(at.id(), at);
         Ok(())
     }

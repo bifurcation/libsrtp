@@ -1,32 +1,30 @@
-use crate::crypto_kernel::{Auth, AuthType, AuthTypeID, Reset};
+use super::{Auth, AuthType, AuthTypeID, Reset};
 use crate::srtp::Error;
 use hmac::{Hmac, Mac, NewMac};
 use sha1::Sha1;
 
-type HmacSha1 = Hmac<Sha1>;
-
 #[derive(Clone)]
-struct HMAC {
+struct Context {
     tag_size: usize,
-    mac: HmacSha1,
+    mac: Hmac<Sha1>,
 }
 
-impl HMAC {
+impl Context {
     fn new(key: &[u8], tag_size: usize) -> Result<Self, Error> {
         Ok(Self {
             tag_size: tag_size,
-            mac: HmacSha1::new_from_slice(key).map_err(|_| Error::BadParam)?,
+            mac: Hmac::<Sha1>::new_from_slice(key).map_err(|_| Error::BadParam)?,
         })
     }
 }
 
-impl Reset for HMAC {
+impl Reset for Context {
     fn reset(&mut self) {
         self.mac.reset();
     }
 }
 
-impl Auth for HMAC {
+impl Auth for Context {
     fn tag_size(&self) -> usize {
         self.tag_size
     }
@@ -57,19 +55,19 @@ impl Auth for HMAC {
     }
 }
 
-pub struct NativeHMAC;
+pub struct HmacSha1;
 
-impl AuthType for NativeHMAC {
+impl AuthType for HmacSha1 {
     fn id(&self) -> AuthTypeID {
         AuthTypeID::HmacSha1
     }
 
     fn create(&self, key: &[u8], tag_size: usize) -> Result<Box<dyn Auth>, Error> {
-        Ok(Box::new(HMAC::new(key, tag_size)?))
+        Ok(Box::new(Context::new(key, tag_size)?))
     }
 
     fn clone(&self) -> Box<dyn AuthType> {
-        Box::new(NativeHMAC)
+        Box::new(HmacSha1)
     }
 }
 
@@ -80,7 +78,7 @@ mod tests {
 
     #[test]
     fn test_hmac() -> Result<(), Error> {
-        let auth_type = NativeHMAC {};
+        let auth_type = HmacSha1 {};
         assert_eq!(auth_type.id(), AuthTypeID::HmacSha1);
 
         let tests_passed = crypto_test::auth(&auth_type)?;

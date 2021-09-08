@@ -1,4 +1,4 @@
-use crate::crypto_kernel::*;
+use crate::crypto::*;
 use crate::srtp::Error;
 
 #[repr(C)]

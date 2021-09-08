@@ -8,7 +8,7 @@ use crate::c::crypto_kernel::{
     singleton_kernel, srtp_crypto_kernel_init, srtp_crypto_kernel_shutdown,
 };
 use crate::c::{just_error, zero_and_drop};
-use crate::crypto_kernel::{AuthTypeID, CipherTypeID};
+use crate::crypto::{AuthTypeID, CipherTypeID};
 use crate::policy::{CryptoPolicy, MasterKey, Policy, ProfileID, SecurityServices, Ssrc};
 use crate::replay::RolloverCounter;
 use crate::srtp::{Context, Error};

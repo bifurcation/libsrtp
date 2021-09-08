@@ -1,4 +1,4 @@
-use crate::crypto_kernel::TagSize;
+use crate::crypto::TagSize;
 use crate::policy::SecurityServices;
 use crate::srtp::{Error, SessionKeys};
 use packed_struct::prelude::*;
@@ -299,7 +299,15 @@ pub struct RtpExtensionReader<'a> {
 }
 
 impl<'a> RtpExtensionReader<'a> {
-    pub fn new(header: &RtpExtensionHeader, data: &'a mut [u8]) -> Result<Self, Error> {
+    pub fn new(
+        maybe_header: Option<&RtpExtensionHeader>,
+        data: &'a mut [u8],
+    ) -> Result<Self, Error> {
+        let header = match maybe_header {
+            Some(header) => header,
+            None => return Ok(Self::empty()),
+        };
+
         let elem_header_size = match header.defined_by_profile {
             ONE_BYTE_HEADER => ElementHeaderSize::OneByte,
             x if (x & TWO_BYTE_HEADER_MASK) == TWO_BYTE_HEADER => ElementHeaderSize::TwoByte,
@@ -473,22 +481,8 @@ impl<'a> SrtpPacket<'a> {
     }
 
     pub fn extensions<'b>(&'b mut self) -> Result<RtpExtensionReader<'b>, Error> {
-        if self.ext_header.is_none() {
-            return Ok(RtpExtensionReader::empty());
-        }
-
-        let ext_header = self.ext_header.as_ref().unwrap();
-        let header_size = match ext_header.defined_by_profile {
-            ONE_BYTE_HEADER => ElementHeaderSize::OneByte,
-            x if (x & TWO_BYTE_HEADER_MASK) == TWO_BYTE_HEADER => ElementHeaderSize::TwoByte,
-            _ => return Err(Error::BadParam),
-        };
-
         let ext_data = &mut self.data[self.ext_start..self.payload_start];
-        Ok(RtpExtensionReader {
-            reader: OffsetReader::new(ext_data),
-            header_size: header_size,
-        })
+        RtpExtensionReader::new(self.ext_header.as_ref(), ext_data)
     }
 
     pub fn aad<'b>(&'b self) -> &'b [u8] {
@@ -813,7 +807,7 @@ impl<'a> SrtcpPacket<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::crypto_kernel::{AuthTypeID, CipherTypeID, CryptoKernel, ExtensionCipherTypeID};
+    use crate::crypto::{AuthTypeID, CipherTypeID, CryptoKernel, ExtensionCipherTypeID};
     use crate::key_limit::KeyLimitContext;
     use crate::util::xor_eq;
     use hex_literal::hex;

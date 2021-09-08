@@ -1,5 +1,4 @@
-use crate::crypto_kernel::constants;
-use crate::crypto_kernel::{CipherInstance, CipherTypeID, CryptoKernel};
+use crate::crypto::{constants, CipherInstance, CipherTypeID, CryptoKernel};
 use crate::srtp::Error;
 use num_enum::IntoPrimitive;
 

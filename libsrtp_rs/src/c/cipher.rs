@@ -3,15 +3,15 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 
-use crate::aes_gcm::NativeAesGcm;
-use crate::aes_icm::NativeAesIcm;
 use crate::c::err::srtp_debug_module_t;
 use crate::c::{just_error, zero_and_drop};
-use crate::crypto_kernel::constants::AesKeySize;
-use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID};
-use crate::null_cipher::NullCipher;
+use crate::crypto::aes_gcm::AesGcm;
+use crate::crypto::aes_icm::AesIcm;
+use crate::crypto::constants::AesKeySize;
+use crate::crypto::null_cipher::NullCipher;
+use crate::crypto::xor_eq;
+use crate::crypto::{Cipher, CipherType, CipherTypeID};
 use crate::srtp::Error;
-use crate::util::xor_eq;
 use cpu_time::ThreadTime;
 use cstr::cstr;
 use rand::RngCore;
@@ -305,7 +305,7 @@ extern "C" fn aes_icm_128_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = Box::new(NativeAesIcm::new(AesKeySize::Aes128));
+    let cipher_type = Box::new(AesIcm::new(AesKeySize::Aes128));
     cipher_alloc(cipher_type, &srtp_aes_icm_128, cp, key_len, tag_len)
 }
 
@@ -376,7 +376,7 @@ extern "C" fn aes_icm_192_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = Box::new(NativeAesIcm::new(AesKeySize::Aes192));
+    let cipher_type = Box::new(AesIcm::new(AesKeySize::Aes192));
     cipher_alloc(cipher_type, &srtp_aes_icm_192, cp, key_len, tag_len)
 }
 
@@ -408,7 +408,7 @@ extern "C" fn aes_icm_256_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = Box::new(NativeAesIcm::new(AesKeySize::Aes256));
+    let cipher_type = Box::new(AesIcm::new(AesKeySize::Aes256));
     cipher_alloc(cipher_type, &srtp_aes_icm_256, cp, key_len, tag_len)
 }
 
@@ -472,7 +472,7 @@ extern "C" fn aes_gcm_128_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = match NativeAesGcm::new(AesKeySize::Aes128) {
+    let cipher_type = match AesGcm::new(AesKeySize::Aes128) {
         Ok(x) => x,
         Err(err) => return err,
     };
@@ -509,7 +509,7 @@ extern "C" fn aes_gcm_256_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = match NativeAesGcm::new(AesKeySize::Aes256) {
+    let cipher_type = match AesGcm::new(AesKeySize::Aes256) {
         Ok(x) => x,
         Err(err) => return err,
     };

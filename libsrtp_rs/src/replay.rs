@@ -95,6 +95,7 @@ impl ReplayDB {
         Ok(self.window_start)
     }
 
+    #[cfg(feature = "cffi")]
     pub fn get_value(&self) -> u32 {
         self.window_start
     }

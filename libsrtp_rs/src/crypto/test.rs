@@ -1,4 +1,4 @@
-use crate::crypto_kernel::{
+use crate::crypto::{
     AuthType, AuthTypeID, CipherType, CipherTypeID, ExtensionCipherType, ExtensionCipherTypeID,
 };
 use crate::replay::ExtendedSequenceNumber;

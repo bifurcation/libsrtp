@@ -1,8 +1,7 @@
-use crate::crypto_kernel::constants::AesKeySize;
-use crate::crypto_kernel::{Cipher, CipherType, CipherTypeID, Reset};
+use super::constants::AesKeySize;
+use super::{xor_eq, Cipher, CipherType, CipherTypeID, Reset};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
-use crate::util::xor_eq;
 use aes_gcm::aead::{generic_array::GenericArray, AeadInPlace, NewAead};
 use aes_gcm::{AeadCore, Aes128Gcm, Aes256Gcm, Key, Nonce};
 
@@ -178,21 +177,21 @@ where
     }
 }
 
-pub struct NativeAesGcm {
+pub struct AesGcm {
     key_size: AesKeySize,
 }
 
-impl NativeAesGcm {
+impl AesGcm {
     pub fn new(key_size: AesKeySize) -> Result<Self, Error> {
         if key_size == AesKeySize::Aes192 {
             return Err(Error::BadParam);
         }
 
-        Ok(NativeAesGcm { key_size: key_size })
+        Ok(AesGcm { key_size: key_size })
     }
 }
 
-impl CipherType for NativeAesGcm {
+impl CipherType for AesGcm {
     fn id(&self) -> CipherTypeID {
         self.key_size.as_gcm_id()
     }
@@ -214,7 +213,7 @@ impl CipherType for NativeAesGcm {
     }
 
     fn clone(&self) -> Box<dyn CipherType> {
-        Box::new(NativeAesGcm {
+        Box::new(AesGcm {
             key_size: self.key_size,
         })
     }
@@ -228,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_128() -> Result<(), Error> {
-        let cipher_type = NativeAesGcm::new(AesKeySize::Aes128)?;
+        let cipher_type = AesGcm::new(AesKeySize::Aes128)?;
         assert_eq!(cipher_type.id(), CipherTypeID::AesGcm128);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;
@@ -239,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_256() -> Result<(), Error> {
-        let cipher_type = NativeAesGcm::new(AesKeySize::Aes256)?;
+        let cipher_type = AesGcm::new(AesKeySize::Aes256)?;
         assert_eq!(cipher_type.id(), CipherTypeID::AesGcm256);
 
         let tests_passed = crypto_test::cipher(&cipher_type)?;
@@ -262,7 +261,7 @@ mod tests {
         let pt = [0xab; 16];
         let ct = hex!("0eca0cf95ee955b26cd3d288b49f6ca9f4b1b759719eb5bc113b9ff1d40cd25a");
 
-        let cipher_type = NativeAesGcm::new(AesKeySize::Aes128)?;
+        let cipher_type = AesGcm::new(AesKeySize::Aes128)?;
         let mut cipher = cipher_type.create(&key, &salt)?;
 
         // Verify correct nonce formation

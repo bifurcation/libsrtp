@@ -11,16 +11,20 @@ crate-type = ["staticlib"]
 opt-level = 0
 debug = true
 
+[features]
+cffi = ["libc", "cstr", "cpu-time", "rand"]
+default = ["cffi"]
+
 [dev-dependencies]
 hex = "0.4.3"
 rand = "0.8.3"
 
 [dependencies]
-libc = "0.2.93"            # Only until we can get rid of src/c/alloc.rs
-num_enum = "0.5.1"         # For enum conversion to C values
-cstr = "0.2.8"             # For C string constants
-cpu-time = "1.0.0"         # For cipher performance testing in C interface
-rand = "0.8.3"             # For rand_for_tests functions
+libc = { version = "0.2.93", optional = true }     # Only until we can get rid of src/c/alloc.rs
+cstr = { version = "0.2.8", optional = true }      # For C string constants
+cpu-time = { version = "1.0.0", optional = true }  # For cipher performance testing in C interface
+rand = { version = "0.8.3", optional = true }      # For rand_for_tests functions
+num_enum = "0.5.1"         # For enum conversion to numeric values
 packed_struct = "0.5"      # For RTP header parsing
 constant_time_eq = "0.1.5" # For auth tag checking
 hex-literal = "0.3.3"      # For test vector literals

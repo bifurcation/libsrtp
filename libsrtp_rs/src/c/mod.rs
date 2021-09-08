@@ -1,13 +1,13 @@
-pub mod aes;
-pub mod alloc;
-pub mod auth;
-pub mod cipher;
-pub mod crypto_kernel;
-pub mod err;
-pub mod key_limit;
-pub mod replay;
-pub mod sha1;
-pub mod srtp;
+mod aes;
+mod alloc;
+mod auth;
+mod cipher;
+mod crypto_kernel;
+mod err;
+mod key_limit;
+mod replay;
+mod sha1;
+mod srtp;
 
 use crate::srtp::Error;
 
