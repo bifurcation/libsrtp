@@ -16,7 +16,7 @@ pub(crate) mod aes_icm;
 pub(crate) mod hmac_sha1;
 pub(crate) mod null_auth;
 pub(crate) mod null_cipher;
-mod test;
+mod self_test;
 
 use self::aes_gcm::AesGcm;
 use self::aes_icm::AesIcm;
@@ -294,6 +294,7 @@ pub trait Auth: Reset {
     fn start(&mut self) -> Result<(), Error>;
     fn update(&mut self, update: &[u8]) -> Result<(), Error>;
     fn compute(&mut self, tag: &mut [u8]) -> Result<(), Error>;
+    fn constant_time_eq(&self, tag_a: &[u8], tag_b: &[u8]) -> bool;
 }
 
 impl Reset for Box<dyn Auth> {
@@ -365,19 +366,19 @@ impl CryptoKernel {
     }
 
     pub fn load_xtn_cipher_type(&mut self, ect: Box<dyn ExtensionCipherType>) -> Result<(), Error> {
-        test::xtn_cipher(ect.as_ref())?;
+        self_test::xtn_cipher(ect.as_ref())?;
         self.xtn_cipher_types.insert(ect.xtn_id(), ect);
         Ok(())
     }
 
     pub fn load_cipher_type(&mut self, ct: Box<dyn CipherType>) -> Result<(), Error> {
-        test::cipher(ct.as_ref())?;
+        self_test::cipher(ct.as_ref())?;
         self.cipher_types.insert(ct.id(), ct);
         Ok(())
     }
 
     pub fn load_auth_type(&mut self, at: Box<dyn AuthType>) -> Result<(), Error> {
-        test::auth(at.as_ref())?;
+        self_test::auth(at.as_ref())?;
         self.auth_types.insert(at.id(), at);
         Ok(())
     }
@@ -410,13 +411,13 @@ impl CryptoKernel {
         Ok(Instance::new(auth))
     }
 
-    // XXX(RLB) Only needed to support C interface
+    #[cfg(feature = "cffi")]
     pub fn cipher_type(&self, id: CipherTypeID) -> Result<Box<dyn CipherType>, Error> {
         let cipher_type = self.cipher_types.get(&id).ok_or(Error::Fail)?;
         Ok(cipher_type.deref().clone())
     }
 
-    // XXX(RLB) Only needed to support C interface
+    #[cfg(feature = "cffi")]
     pub fn auth_type(&self, id: AuthTypeID) -> Result<Box<dyn AuthType>, Error> {
         let auth_type = self.auth_types.get(&id).ok_or(Error::Fail)?;
         Ok(auth_type.deref().clone())

@@ -450,13 +450,13 @@ mod rdb_tests {
 
         rdb.window_start = 0x7ffffffe;
         rdb.increment().unwrap();
-        assert_eq!(rdb.get_value(), 0x7fffffff);
+        assert_eq!(rdb.window_start, 0x7fffffff);
 
         match rdb.increment() {
             Err(Error::KeyExpired) => {}
             _ => panic!("Allowed use of expired key"),
         }
-        assert_eq!(rdb.get_value(), 0x7fffffff);
+        assert_eq!(rdb.window_start, 0x7fffffff);
     }
 
     // TODO(RLB) ReplayDB benchmarking

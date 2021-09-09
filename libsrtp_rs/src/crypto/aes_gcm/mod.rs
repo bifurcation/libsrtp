@@ -222,7 +222,7 @@ impl CipherType for AesGcm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto_test;
+    use crate::crypto::self_test;
     use hex_literal::hex;
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
         let cipher_type = AesGcm::new(AesKeySize::Aes128)?;
         assert_eq!(cipher_type.id(), CipherTypeID::AesGcm128);
 
-        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        let tests_passed = self_test::cipher(&cipher_type)?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -241,7 +241,7 @@ mod tests {
         let cipher_type = AesGcm::new(AesKeySize::Aes256)?;
         assert_eq!(cipher_type.id(), CipherTypeID::AesGcm256);
 
-        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        let tests_passed = self_test::cipher(&cipher_type)?;
         assert!(tests_passed > 0);
 
         Ok(())

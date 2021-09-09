@@ -807,9 +807,8 @@ impl<'a> SrtcpPacket<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::crypto::{AuthTypeID, CipherTypeID, CryptoKernel, ExtensionCipherTypeID};
+    use crate::crypto::{xor_eq, AuthTypeID, CipherTypeID, CryptoKernel, ExtensionCipherTypeID};
     use crate::key_limit::KeyLimitContext;
-    use crate::util::xor_eq;
     use hex_literal::hex;
 
     // SRTP extension parsing
@@ -851,7 +850,7 @@ mod test {
             },
         ];
 
-        let mut reader = RtpExtensionReader::new(&ext_header, &mut ext_data)?;
+        let mut reader = RtpExtensionReader::new(Some(&ext_header), &mut ext_data)?;
         let mut i = 0usize;
         reader.apply(|ext| {
             assert_eq!(ext, expected_extensions[i]);
@@ -900,7 +899,7 @@ mod test {
             },
         ];
 
-        let mut reader = RtpExtensionReader::new(&ext_header, &mut ext_data)?;
+        let mut reader = RtpExtensionReader::new(Some(&ext_header), &mut ext_data)?;
         let mut i = 0usize;
         loop {
             match reader.next() {

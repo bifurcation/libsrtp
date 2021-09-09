@@ -240,7 +240,7 @@ impl CipherType for AesIcm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto_test;
+    use crate::crypto::self_test;
     use hex_literal::hex;
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
         let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes128));
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm128);
 
-        let tests_passed = crypto_test::cipher(cipher_type.as_ref())?;
+        let tests_passed = self_test::cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -259,7 +259,7 @@ mod tests {
         let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes192));
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm192);
 
-        let tests_passed = crypto_test::cipher(cipher_type.as_ref())?;
+        let tests_passed = self_test::cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -270,7 +270,7 @@ mod tests {
         let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes256));
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm256);
 
-        let tests_passed = crypto_test::cipher(cipher_type.as_ref())?;
+        let tests_passed = self_test::cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -281,7 +281,7 @@ mod tests {
         let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes128));
         assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm128);
 
-        let tests_passed = crypto_test::xtn_cipher(cipher_type.as_ref())?;
+        let tests_passed = self_test::xtn_cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -292,7 +292,7 @@ mod tests {
         let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes192));
         assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm192);
 
-        let tests_passed = crypto_test::xtn_cipher(cipher_type.as_ref())?;
+        let tests_passed = self_test::xtn_cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -303,7 +303,7 @@ mod tests {
         let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes256));
         assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm256);
 
-        let tests_passed = crypto_test::xtn_cipher(cipher_type.as_ref())?;
+        let tests_passed = self_test::xtn_cipher(cipher_type.as_ref())?;
         assert!(tests_passed > 0);
 
         Ok(())

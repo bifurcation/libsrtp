@@ -92,14 +92,14 @@ impl CipherType for NullCipher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto_test;
+    use crate::crypto::self_test;
 
     #[test]
     fn test_null_cipher() -> Result<(), Error> {
         let cipher_type = NullCipher {};
         assert_eq!(cipher_type.id(), CipherTypeID::Null);
 
-        let tests_passed = crypto_test::cipher(&cipher_type)?;
+        let tests_passed = self_test::cipher(&cipher_type)?;
         assert!(tests_passed > 0);
 
         Ok(())
@@ -110,7 +110,7 @@ mod tests {
         let cipher_type = NullCipher {};
         assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::Null);
 
-        let tests_passed = crypto_test::xtn_cipher(&cipher_type)?;
+        let tests_passed = self_test::xtn_cipher(&cipher_type)?;
         assert!(tests_passed > 0);
 
         Ok(())

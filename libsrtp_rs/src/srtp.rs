@@ -4,7 +4,6 @@ use crate::key_limit::*;
 use crate::packets::{PackedSize, SrtcpPacket, SrtcpTrailer, SrtpPacket};
 use crate::policy::*;
 use crate::replay::*;
-use constant_time_eq::constant_time_eq;
 use std::any::Any;
 use std::cmp;
 use std::rc::{Rc, Weak};
@@ -254,7 +253,7 @@ impl SessionKeys {
         op.compute(tag)?;
 
         let pkt_tag = pkt.last(tag_size)?;
-        if !constant_time_eq(tag, pkt_tag) {
+        if !op.constant_time_eq(tag, pkt_tag) {
             return Err(Error::AuthFail);
         }
 
@@ -287,8 +286,7 @@ impl SessionKeys {
 
         op.update(pkt.auth_data())?;
         op.compute(tag)?;
-
-        if !constant_time_eq(tag, pkt.last(tag_size)?) {
+        if !op.constant_time_eq(tag, pkt.last(tag_size)?) {
             return Err(Error::AuthFail);
         }
 
