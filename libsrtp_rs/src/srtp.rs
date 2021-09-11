@@ -323,16 +323,13 @@ impl SessionKeys {
         let mut inst = self.rtp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
         let mut op = inst.start();
 
-        op.add_aad(pkt.aad())?;
-
         let mut nonce = [0u8; 16];
         let nonce_size = op.id().nonce_size();
         let nonce = &mut nonce[..nonce_size];
         op.rtp_nonce(pkt.header.ssrc, index, nonce)?;
-        op.set_nonce(nonce)?;
 
         let pt_size = pkt.payload_size();
-        let ct_size = op.encrypt(pkt.payload_for_encrypt(), pt_size)?;
+        let ct_size = op.encrypt_one(nonce, &[pkt.aad()], pkt.payload_for_encrypt(), pt_size)?;
         pkt.set_payload_size(ct_size)?;
         Ok(())
     }
@@ -345,15 +342,12 @@ impl SessionKeys {
         let mut inst = self.rtp_cipher.try_borrow_mut().map_err(|_| Error::Fail)?;
         let mut op = inst.start();
 
-        op.add_aad(pkt.aad())?;
-
         let mut nonce = [0u8; 16];
         let nonce_size = op.id().nonce_size();
         let nonce = &mut nonce[..nonce_size];
         op.rtp_nonce(pkt.header.ssrc, index, nonce)?;
-        op.set_nonce(nonce)?;
 
-        let pt_size = op.decrypt(pkt.payload_for_decrypt())?;
+        let pt_size = op.decrypt_one(nonce, &[pkt.aad()], pkt.payload_for_decrypt())?;
         pkt.set_payload_size(pt_size)?;
         Ok(())
     }
@@ -368,21 +362,23 @@ impl SessionKeys {
         let mut op = inst.start();
 
         let (aad1, aad2) = pkt.aad(0)?;
-        op.add_aad(aad1)?;
-        op.add_aad(aad2)?;
-
         let mut nonce = [0u8; 16];
         let nonce_size = op.id().nonce_size();
         let nonce = &mut nonce[..nonce_size];
         op.rtcp_nonce(pkt.header.ssrc, index as u32, nonce)?;
-        op.set_nonce(nonce)?;
 
         let pt_size = pkt.payload_size();
         let ct_size = if auth_only {
-            let overhead = op.encrypt(pkt.payload_for_encrypt(true), 0)?;
+            let overhead =
+                op.encrypt_one(&nonce, &[aad1, aad2], pkt.payload_for_encrypt(true), 0)?;
             pt_size + overhead
         } else {
-            op.encrypt(pkt.payload_for_encrypt(false), pt_size)?
+            op.encrypt_one(
+                &nonce,
+                &[aad1, aad2],
+                pkt.payload_for_encrypt(false),
+                pt_size,
+            )?
         };
 
         pkt.set_payload_size(ct_size)?;
@@ -400,26 +396,23 @@ impl SessionKeys {
 
         let overhead = op.overhead();
         let (aad1, aad2) = pkt.aad(overhead)?;
-        op.add_aad(aad1)?;
-        op.add_aad(aad2)?;
 
         let mut nonce = [0u8; 16];
         let nonce_size = op.id().nonce_size();
         let nonce = &mut nonce[..nonce_size];
         op.rtcp_nonce(pkt.header.ssrc, index, nonce)?;
-        op.set_nonce(nonce)?;
 
         let ct_size = pkt.payload_size();
         let pt_size = if auth_only {
             let payload = pkt.payload_for_decrypt_tag_only(overhead)?;
-            let remaining_tag = op.decrypt(payload)?;
+            let remaining_tag = op.decrypt_one(nonce, &[aad1, aad2], payload)?;
             if remaining_tag != 0 {
                 return Err(Error::BadParam);
             }
 
             ct_size - overhead
         } else {
-            op.decrypt(pkt.payload_for_decrypt())?
+            op.decrypt_one(nonce, &[aad1, aad2], pkt.payload_for_decrypt())?
         };
 
         pkt.set_payload_size(pt_size)?;

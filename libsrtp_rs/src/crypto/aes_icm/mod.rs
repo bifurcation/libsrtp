@@ -179,6 +179,25 @@ where
         Ok(())
     }
 
+    fn encrypt_one(
+        &mut self,
+        nonce: &[u8],
+        _aad: &[&[u8]],
+        buf: &mut [u8],
+        pt_size: usize,
+    ) -> Result<usize, Error> {
+        let iv = GenericArray::from_slice(&nonce);
+        let key = GenericArray::from_slice(self.key());
+        Ctr128BE::<C>::new(&key, iv.into())
+            .try_apply_keystream(&mut buf[..pt_size])
+            .map(|_| pt_size)
+            .map_err(|_| Error::CipherFail)
+    }
+
+    fn decrypt_one(&mut self, nonce: &[u8], aad: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error> {
+        self.encrypt_one(nonce, aad, buf, buf.len())
+    }
+
     fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         self.cipher
             .as_mut()
@@ -357,17 +376,13 @@ mod tests {
         // Verify correct encryption
         let mut enc_buffer = [0u8; 16];
         enc_buffer[..pt.len()].copy_from_slice(&pt);
-        cipher.add_aad(&aad)?;
-        cipher.set_nonce(&nonce)?;
-        let ct_size = cipher.encrypt(&mut enc_buffer, pt.len())?;
+        let ct_size = cipher.encrypt_one(&nonce, &[&aad], &mut enc_buffer, pt.len())?;
         assert_eq!(ct_size, ct.len());
         assert_eq!(enc_buffer, ct);
 
         // Verify correct decryption
         cipher.reset();
-        cipher.add_aad(&aad)?;
-        cipher.set_nonce(&nonce)?;
-        let pt_size = cipher.decrypt(&mut enc_buffer)?;
+        let pt_size = cipher.decrypt_one(&nonce, &[&aad], &mut enc_buffer)?;
         assert_eq!(pt_size, pt.len());
         assert_eq!(&enc_buffer[..pt_size], &pt);
 

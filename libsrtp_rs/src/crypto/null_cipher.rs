@@ -54,12 +54,31 @@ impl Cipher for Context {
         Ok(())
     }
 
+    fn encrypt_one(
+        &mut self,
+        _nonce: &[u8],
+        _aad: &[&[u8]],
+        _buf: &mut [u8],
+        pt_size: usize,
+    ) -> Result<usize, Error> {
+        Ok(pt_size)
+    }
+
+    fn decrypt_one(
+        &mut self,
+        _nonce: &[u8],
+        _aad: &[&[u8]],
+        buf: &mut [u8],
+    ) -> Result<usize, Error> {
+        Ok(buf.len())
+    }
+
     fn encrypt(&mut self, _buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
         Ok(pt_size)
     }
 
-    fn decrypt(&mut self, _buf: &mut [u8]) -> Result<usize, Error> {
-        Ok(_buf.len())
+    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        Ok(buf.len())
     }
 }
 

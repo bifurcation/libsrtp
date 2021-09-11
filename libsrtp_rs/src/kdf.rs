@@ -53,10 +53,61 @@ impl KDF {
         let mut nonce = self.salt;
         let label_u8: u8 = label.into();
         nonce[7] ^= label_u8;
-        op.set_nonce(&nonce)?;
 
         buffer.fill(0);
-        op.encrypt(buffer, buffer.len())?;
+        op.encrypt_one(&nonce, &[], buffer, buffer.len())?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn test_kdf() -> Result<(), Error> {
+        let kdf_key = hex!("e1f97a0d3e018be0d64fa32c06de4139");
+        let kdf_salt = hex!("0ec675ad498afeebb6960b3aabe6");
+        let test_keys: [(KdfLabel, &[u8]); 8] = [
+            (
+                KdfLabel::RtpEncryption,
+                &hex!("c61e7a93744f39ee10734afe3ff7a087"),
+            ),
+            (KdfLabel::RtpSalt, &hex!("30cbbc08863d8c85d49db34a9ae1")),
+            (
+                KdfLabel::RtpMsgAuth,
+                &hex!("cebe321f6ff7716b6fd4ab49af256a15"),
+            ),
+            (
+                KdfLabel::RtpHeaderEncryption,
+                &hex!("549752054d6fb708622c4a2e596a1b93"),
+            ),
+            (
+                KdfLabel::RtpHeaderSalt,
+                &hex!("ab01818174c40d39a3781f7c2d27"),
+            ),
+            (
+                KdfLabel::RtcpEncryption,
+                &hex!("4c1aa45a81f73d61c800bbb00fbb1eaa"),
+            ),
+            (KdfLabel::RtcpSalt, &hex!("9581c7ad87b3e530bf3e4454a8b3")),
+            (
+                KdfLabel::RtcpMsgAuth,
+                &hex!("8d54534feb49ae8e7993a6bd0b844fc3"),
+            ),
+        ];
+
+        // Initialize the KDF
+        let kernel = CryptoKernel::default()?;
+        let kdf = KDF::new(&kernel, CipherTypeID::AesIcm128, &kdf_key, &kdf_salt)?;
+
+        // Verify proper derivation
+        for (label, ref_val) in test_keys {
+            let mut gen_val = vec![0u8; ref_val.len()];
+            kdf.generate(label, &mut gen_val)?;
+            assert_eq!(gen_val, ref_val);
+        }
         Ok(())
     }
 }

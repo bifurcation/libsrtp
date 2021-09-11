@@ -15,7 +15,7 @@ debug = true
 rust-crypto = ["hmac", "sha-1", "constant_time_eq"]
 openssl-crypto = ["openssl", "ouroboros"]
 cffi = ["libc", "cstr", "cpu-time", "rand"]
-default = ["cffi", "rust-crypto"]
+default = ["rust-crypto"]
 
 [dev-dependencies]
 hex = "0.4.3"

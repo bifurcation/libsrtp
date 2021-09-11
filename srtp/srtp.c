@@ -943,6 +943,9 @@ srtp_err_status_t srtp_stream_init_keys(srtp_stream_ctx_t *srtp,
     memset(tmp_key, 0x0, MAX_SRTP_KEY_LEN);
     memcpy(tmp_key, key, (rtp_base_key_len + rtp_salt_len));
 
+    debug_print(mod_srtp, "kdf key: %s",
+                srtp_octet_string_hex_string(tmp_key, rtp_base_key_len + rtp_salt_len));
+
 /* initialize KDF state     */
 #if defined(OPENSSL) && defined(OPENSSL_KDF)
     stat = srtp_kdf_init(&kdf, (const uint8_t *)tmp_key, rtp_base_key_len,

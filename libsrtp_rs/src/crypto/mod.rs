@@ -223,6 +223,18 @@ pub trait Cipher: Reset {
     ) -> Result<usize, Error>;
     fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error>;
 
+    // XXX(RLB) Note:
+    // * `&mut self` to match the C tests' expectations of ciphers
+    // * `aad: &[&[u8]]` to allow for SRTCP's discontiguous AAD
+    fn encrypt_one(
+        &mut self,
+        nonce: &[u8],
+        aad: &[&[u8]],
+        buf: &mut [u8],
+        pt_size: usize,
+    ) -> Result<usize, Error>;
+    fn decrypt_one(&mut self, nonce: &[u8], aad: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error>;
+
     // XXX(RLB) It would be cleaner just to have a more modern Seal/Open interface here.  The
     // incremental interface is here for two reasons:
     //

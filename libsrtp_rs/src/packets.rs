@@ -485,8 +485,12 @@ impl<'a> SrtpPacket<'a> {
         RtpExtensionReader::new(self.ext_header.as_ref(), ext_data)
     }
 
-    pub fn aad<'b>(&'b self) -> &'b [u8] {
-        &self.data[..self.payload_start]
+    pub fn aad<'b>(&self) -> &'b [u8] {
+        // XXX(RLB) We need to break Rust's safety model here so that we can provide two slices of
+        // the packet to encrypt/decrypt calls.  So we make a clone of the relevant AAD slice via
+        // pointer dissolution and reconstruction.
+        let aad = &self.data[..self.payload_start];
+        unsafe { std::slice::from_raw_parts(aad.as_ptr(), aad.len()) }
     }
 
     pub fn auth_data<'b>(&'b self) -> &'b [u8] {
@@ -681,7 +685,7 @@ impl<'a> SrtcpPacket<'a> {
         Ok(())
     }
 
-    pub fn aad<'b>(&'b mut self, overhead: usize) -> Result<(&'b [u8], &'b [u8]), Error> {
+    pub fn aad<'b>(&mut self, overhead: usize) -> Result<(&'b [u8], &'b [u8]), Error> {
         let trailer = self.trailer.as_ref().ok_or(Error::BadParam)?;
         let base_aad_end = if trailer.e {
             RtcpHeader::PACKED_SIZE
@@ -693,7 +697,16 @@ impl<'a> SrtcpPacket<'a> {
             self.payload_end - overhead
         };
 
-        Ok((&self.data[..base_aad_end], &self.trailer_data))
+        // XXX(RLB) We need to break Rust's safety model here so that we can provide two slices of
+        // the packet to encrypt/decrypt calls.  So we make a clone of the relevant AAD slice via
+        // pointer dissolution and reconstruction.
+        let aad1 = &self.data[..base_aad_end];
+        let aad1_slice = unsafe { std::slice::from_raw_parts(aad1.as_ptr(), aad1.len()) };
+
+        let aad2 = &self.trailer_data;
+        let aad2_slice = unsafe { std::slice::from_raw_parts(aad2.as_ptr(), aad2.len()) };
+
+        Ok((aad1_slice, aad2_slice))
     }
 
     pub fn auth_data<'b>(&'b self) -> &'b [u8] {

@@ -1,40 +1,35 @@
-#![cfg(feature = "rust-crypto")]
+#![cfg(feature = "openssl-crypto")]
 use crate::crypto::constants::AesKeySize;
 use crate::crypto::{xor_eq, Cipher, CipherType, CipherTypeID, Reset};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
-use aes_gcm::aead::{generic_array::GenericArray, AeadInPlace, NewAead};
-use aes_gcm::{AeadCore, Aes128Gcm, Aes256Gcm, Key, Nonce};
 
-#[derive(Clone)]
-struct Context<C>
-where
-    C: AeadCore,
-{
-    key_size: AesKeySize,
-    key: [u8; 32],
-    cipher: C,
-    salt: [u8; 12],
-    aad: [u8; 512],
-    aad_size: usize,
-    nonce: Option<Nonce<C::NonceSize>>,
+use openssl::symm;
+use openssl::symm::{Crypter, Mode};
+
+fn val_or_fail<T, E>(result: Result<T, E>) -> Result<T, Error> {
+    result.map_err(|_| Error::CipherFail)
 }
 
-impl<C> Reset for Context<C>
-where
-    C: AeadCore,
-{
+struct Context {
+    key_size: AesKeySize,
+    cipher: symm::Cipher,
+    key: [u8; 32],
+    salt: [u8; 12],
+    nonce: Option<[u8; 12]>,
+    aad: [u8; 512],
+    aad_size: usize,
+}
+
+impl Reset for Context {
     fn reset(&mut self) {
+        self.nonce = None;
         self.aad.fill(0);
         self.aad_size = 0;
-        self.nonce = None;
     }
 }
 
-impl<C> Context<C>
-where
-    C: AeadCore + NewAead,
-{
+impl Context {
     const SALT_SIZE: usize = 12;
     const TAG_SIZE: usize = 16;
     const MAX_AAD_SIZE: usize = 512;
@@ -44,26 +39,38 @@ where
             return Err(Error::BadParam);
         }
 
+        let cipher = match key_size {
+            AesKeySize::Aes128 => symm::Cipher::aes_128_gcm(),
+            AesKeySize::Aes192 => symm::Cipher::aes_192_gcm(),
+            AesKeySize::Aes256 => symm::Cipher::aes_256_gcm(),
+        };
+
         let mut ctx = Context {
             key_size: key_size,
+            cipher: cipher,
             key: [0; 32],
-            cipher: C::new(Key::from_slice(key)),
             salt: [0; 12],
+            nonce: None,
             aad: [0; 512],
             aad_size: 0,
-            nonce: None,
         };
 
         ctx.key[..key.len()].copy_from_slice(key);
         ctx.salt.copy_from_slice(salt);
         Ok(ctx)
     }
+
+    fn key(&self) -> &[u8] {
+        let key_size: usize = self.key_size.into();
+        &self.key[..key_size]
+    }
+
+    fn aad(&self) -> &[u8] {
+        &self.aad[..self.aad_size]
+    }
 }
 
-impl<C> Cipher for Context<C>
-where
-    C: Clone + AeadCore + AeadInPlace + NewAead + 'static,
-{
+impl Cipher for Context {
     fn id(&self) -> CipherTypeID {
         self.key_size.as_gcm_id()
     }
@@ -138,98 +145,10 @@ where
     }
 
     fn set_nonce(&mut self, nonce: &[u8]) -> Result<(), Error> {
-        self.nonce = Some(Nonce::clone_from_slice(&nonce));
+        let mut nonce_copy = [0u8; Self::SALT_SIZE];
+        nonce_copy.copy_from_slice(nonce);
+        self.nonce = Some(nonce_copy);
         Ok(())
-    }
-
-    fn encrypt_one(
-        &mut self,
-        nonce_in: &[u8],
-        aad_in: &[&[u8]],
-        buf: &mut [u8],
-        pt_size: usize,
-    ) -> Result<usize, Error> {
-        let ct_size = pt_size + Self::TAG_SIZE;
-        if buf.len() < ct_size {
-            return Err(Error::BadParam);
-        }
-
-        // Assemble AAD
-        let mut aad_buf = [0u8; 512];
-        let mut aad_size = 0;
-        for elem in aad_in {
-            let new_aad_size = aad_size + elem.len();
-            if new_aad_size > aad_buf.len() {
-                return Err(Error::BadParam);
-            }
-
-            aad_buf[aad_size..new_aad_size].copy_from_slice(elem);
-            aad_size = new_aad_size
-        }
-
-        // Encrypt in-place
-        let nonce = Nonce::clone_from_slice(nonce_in);
-        let aad = &aad_buf[..aad_size];
-        let tag = self
-            .cipher
-            .encrypt_in_place_detached(&nonce, aad, &mut buf[..pt_size])
-            .map_err(|_| Error::CipherFail)?;
-
-        buf[pt_size..ct_size].copy_from_slice(&tag);
-
-        println!("enc key: {:02x?}", self.key);
-        println!("enc nonce: {:02x?}", nonce_in);
-        println!("enc aad: {:02x?}", &aad_buf[..aad_size]);
-        println!("enc ct: {:02x?}", &buf[..ct_size]);
-
-        Ok(ct_size)
-    }
-
-    fn decrypt_one(
-        &mut self,
-        nonce_in: &[u8],
-        aad_in: &[&[u8]],
-        buf: &mut [u8],
-    ) -> Result<usize, Error> {
-        let ct_size = buf.len();
-        if ct_size < Self::TAG_SIZE {
-            return Err(Error::BadParam);
-        }
-
-        // Assemble AAD
-        let mut aad_buf = [0u8; 512];
-        let mut aad_size = 0;
-        for elem in aad_in {
-            let new_aad_size = aad_size + elem.len();
-            if new_aad_size > aad_buf.len() {
-                return Err(Error::BadParam);
-            }
-
-            aad_buf[aad_size..new_aad_size].copy_from_slice(elem);
-            aad_size = new_aad_size;
-        }
-
-        println!("dec key: {:02x?}", self.key);
-        println!("dec nonce: {:02x?}", nonce_in);
-        println!("dec aad: {:02x?}", &aad_buf[..aad_size]);
-        println!("dec ct: {:02x?}", &buf[..ct_size]);
-
-        // Decrypt in place
-        let pt_size = ct_size - Self::TAG_SIZE;
-        let mut tag = [0u8; 16];
-        tag.copy_from_slice(&buf[pt_size..]);
-        let tag = GenericArray::from_slice(&tag);
-
-        let nonce = Nonce::clone_from_slice(nonce_in);
-        let aad = &aad_buf[..self.aad_size];
-        self.cipher
-            .decrypt_in_place_detached(&nonce, aad, &mut buf[..pt_size], tag)
-            .map_err(|e| {
-                println!("Error: {:?}", e);
-                Error::AuthFail
-            })?;
-        buf[pt_size..].fill(0);
-        Ok(pt_size)
     }
 
     fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
@@ -239,13 +158,28 @@ where
         }
 
         let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
-        let aad = &self.aad[..self.aad_size];
-        let tag = self
-            .cipher
-            .encrypt_in_place_detached(nonce, aad, &mut buf[..pt_size])
-            .map_err(|_| Error::CipherFail)?;
+        let mut crypter = val_or_fail(Crypter::new(
+            self.cipher,
+            Mode::Encrypt,
+            self.key(),
+            Some(nonce),
+        ))?;
 
-        buf[pt_size..ct_size].copy_from_slice(&tag);
+        val_or_fail(crypter.aad_update(self.aad()))?;
+        let count = unsafe {
+            // XXX(RLB) OpenSSL is fine with encrypting in place, but the Rust interface makes it
+            // impossible to do safely.  Note that we over-size the slice (ct_size) because the
+            // Rust wrapper checks that the output has a block size more than the input.
+            let out_ptr: *mut u8 = buf.as_mut_ptr();
+            let out = std::slice::from_raw_parts_mut(out_ptr, pt_size + Self::TAG_SIZE);
+            val_or_fail(crypter.update(buf, out))?
+        };
+        if count != pt_size {
+            return Err(Error::CipherFail);
+        }
+
+        val_or_fail(crypter.finalize(&mut []))?;
+        val_or_fail(crypter.get_tag(&mut buf[pt_size..ct_size]))?;
         Ok(ct_size)
     }
 
@@ -254,19 +188,30 @@ where
         if ct_size < Self::TAG_SIZE {
             return Err(Error::BadParam);
         }
-
         let pt_size = ct_size - Self::TAG_SIZE;
-        let mut tag = [0u8; 16];
-        tag.copy_from_slice(&buf[pt_size..]);
-        let tag = GenericArray::from_slice(&tag);
 
         let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
-        let aad = &self.aad[..self.aad_size];
+        let mut crypter = val_or_fail(Crypter::new(
+            self.cipher,
+            Mode::Decrypt,
+            self.key(),
+            Some(nonce),
+        ))?;
 
-        self.cipher
-            .decrypt_in_place_detached(nonce, aad, &mut buf[..pt_size], tag)
-            .map_err(|_| Error::AuthFail)?;
-        buf[pt_size..].fill(0);
+        val_or_fail(crypter.set_tag(&buf[pt_size..]))?;
+        val_or_fail(crypter.aad_update(self.aad()))?;
+
+        let count = unsafe {
+            // XXX(RLB) See comments above.
+            let out_ptr: *mut u8 = buf.as_mut_ptr();
+            let out = std::slice::from_raw_parts_mut(out_ptr, ct_size + Self::TAG_SIZE);
+            val_or_fail(crypter.update(buf, out))?
+        };
+        if count != pt_size {
+            return Err(Error::CipherFail);
+        }
+
+        val_or_fail(crypter.finalize(&mut []))?;
         Ok(pt_size)
     }
 }
@@ -292,17 +237,9 @@ impl CipherType for AesGcm {
 
     fn create(&self, key: &[u8], salt: &[u8]) -> Result<Box<dyn Cipher>, Error> {
         match self.key_size {
-            AesKeySize::Aes128 => Ok(Box::new(Context::<Aes128Gcm>::new(
-                self.key_size,
-                key,
-                salt,
-            )?)),
+            AesKeySize::Aes128 => Ok(Box::new(Context::new(self.key_size, key, salt)?)),
             AesKeySize::Aes192 => Err(Error::BadParam),
-            AesKeySize::Aes256 => Ok(Box::new(Context::<Aes256Gcm>::new(
-                self.key_size,
-                key,
-                salt,
-            )?)),
+            AesKeySize::Aes256 => Ok(Box::new(Context::new(self.key_size, key, salt)?)),
         }
     }
 
