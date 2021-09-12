@@ -227,10 +227,7 @@ impl SessionKeys {
         let mut tag_buf = [0u8; 128];
         let tag_size = op.tag_size();
         let tag = &mut tag_buf[..tag_size];
-
-        op.update(pkt.auth_data())?;
-        op.update(&roc.to_be_bytes())?;
-        op.compute(tag)?;
+        op.compute(&[pkt.auth_data(), &roc.to_be_bytes()], tag)?;
 
         pkt.append(tag_size)?.copy_from_slice(tag);
         Ok(())
@@ -247,10 +244,7 @@ impl SessionKeys {
         let mut tag_buf = [0u8; 128];
         let tag_size = op.tag_size();
         let tag = &mut tag_buf[..tag_size];
-
-        op.update(pkt.auth_data())?;
-        op.update(&roc.to_be_bytes())?;
-        op.compute(tag)?;
+        op.compute(&[pkt.auth_data(), &roc.to_be_bytes()], tag)?;
 
         let pkt_tag = pkt.last(tag_size)?;
         if !op.constant_time_eq(tag, pkt_tag) {
@@ -268,9 +262,7 @@ impl SessionKeys {
         let mut tag_buf = [0u8; 128];
         let tag_size = op.tag_size();
         let tag = &mut tag_buf[..tag_size];
-
-        op.update(pkt.auth_data())?;
-        op.compute(tag)?;
+        op.compute(&[pkt.auth_data()], tag)?;
 
         pkt.append(tag_size)?.copy_from_slice(tag);
         Ok(())
@@ -283,9 +275,7 @@ impl SessionKeys {
         let mut tag_buf = [0u8; 128];
         let tag_size = op.tag_size();
         let tag = &mut tag_buf[..tag_size];
-
-        op.update(pkt.auth_data())?;
-        op.compute(tag)?;
+        op.compute(&[pkt.auth_data()], tag)?;
         if !op.constant_time_eq(tag, pkt.last(tag_size)?) {
             return Err(Error::AuthFail);
         }

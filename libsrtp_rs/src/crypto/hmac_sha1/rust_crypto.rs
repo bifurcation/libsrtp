@@ -31,21 +31,12 @@ impl Auth for Context {
         self.tag_size
     }
 
-    fn prefix_size(&self) -> usize {
-        0
-    }
-
-    fn start(&mut self) -> Result<(), Error> {
+    fn compute(&mut self, inputs: &[&[u8]], tag: &mut [u8]) -> Result<(), Error> {
         self.mac.reset();
-        Ok(())
-    }
+        for input in inputs {
+            self.mac.update(input);
+        }
 
-    fn update(&mut self, update: &[u8]) -> Result<(), Error> {
-        self.mac.update(update);
-        Ok(())
-    }
-
-    fn compute(&mut self, tag: &mut [u8]) -> Result<(), Error> {
         let digest = self.mac.finalize_reset().into_bytes();
 
         if tag.len() != self.tag_size {

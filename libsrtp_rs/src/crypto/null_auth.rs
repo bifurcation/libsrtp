@@ -12,24 +12,8 @@ impl Auth for Context {
         0
     }
 
-    fn prefix_size(&self) -> usize {
-        0
-    }
-
-    fn start(&mut self) -> Result<(), Error> {
+    fn compute(&mut self, _inputs: &[&[u8]], _tag: &mut [u8]) -> Result<(), Error> {
         Ok(())
-    }
-
-    fn update(&mut self, _update: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn compute(&mut self, tag: &mut [u8]) -> Result<(), Error> {
-        if tag.len() > 0 {
-            Err(Error::AuthFail)
-        } else {
-            Ok(())
-        }
     }
 
     fn constant_time_eq(&self, tag_a: &[u8], tag_b: &[u8]) -> bool {

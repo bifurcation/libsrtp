@@ -278,10 +278,14 @@ impl AuthTypeID {
 
 pub trait Auth: Reset {
     fn tag_size(&self) -> usize;
-    fn prefix_size(&self) -> usize;
-    fn start(&mut self) -> Result<(), Error>;
-    fn update(&mut self, update: &[u8]) -> Result<(), Error>;
-    fn compute(&mut self, tag: &mut [u8]) -> Result<(), Error>;
+
+    // Note:
+    // * `&mut self` to allow for internal mutability of a MAC instance
+    // * `inputs: &[&[u8]]` to allow for SRTP's disaggregated auth input
+    fn compute(&mut self, inputs: &[&[u8]], tag: &mut [u8]) -> Result<(), Error>;
+
+    // This method allows us to expose the crypto libraries' constant-time equality checking
+    // methods, so that we don't have to have our own.
     fn constant_time_eq(&self, tag_a: &[u8], tag_b: &[u8]) -> bool;
 }
 

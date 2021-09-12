@@ -257,9 +257,7 @@ impl AuthTest {
         let mut auth = auth_type.create(self.key, self.tag.len())?;
         let mut tag = vec![0u8; tag_size(self.id)];
 
-        auth.start()?;
-        auth.update(&self.data)?;
-        auth.compute(tag.as_mut_slice())?;
+        auth.compute(&[&self.data], tag.as_mut_slice())?;
         if tag.as_slice() != self.tag {
             return Err(Error::AlgoFail);
         }
