@@ -29,10 +29,6 @@ impl Cipher for Context {
         0
     }
 
-    fn salt(&self) -> Vec<u8> {
-        vec![]
-    }
-
     fn rtp_nonce(
         &self,
         _ssrc: u32,
@@ -46,16 +42,8 @@ impl Cipher for Context {
         Ok(0)
     }
 
-    fn add_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn set_nonce(&mut self, _nonce: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn encrypt_one(
-        &mut self,
+    fn encrypt(
+        &self,
         _nonce: &[u8],
         _aad: &[&[u8]],
         _buf: &mut [u8],
@@ -64,20 +52,7 @@ impl Cipher for Context {
         Ok(pt_size)
     }
 
-    fn decrypt_one(
-        &mut self,
-        _nonce: &[u8],
-        _aad: &[&[u8]],
-        buf: &mut [u8],
-    ) -> Result<usize, Error> {
-        Ok(buf.len())
-    }
-
-    fn encrypt(&mut self, _buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
-        Ok(pt_size)
-    }
-
-    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+    fn decrypt(&self, _nonce: &[u8], _aad: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error> {
         Ok(buf.len())
     }
 }

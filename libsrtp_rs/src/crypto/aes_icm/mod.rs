@@ -149,10 +149,6 @@ where
         0
     }
 
-    fn salt(&self) -> Vec<u8> {
-        self.salt.clone().into()
-    }
-
     fn rtp_nonce(
         &self,
         ssrc: u32,
@@ -168,19 +164,8 @@ where
         self.rtp_nonce(ssrc, index.into(), nonce)
     }
 
-    fn add_aad(&mut self, _aad: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn set_nonce(&mut self, nonce: &[u8]) -> Result<(), Error> {
-        let iv = GenericArray::from_slice(&nonce);
-        let key = GenericArray::from_slice(self.key());
-        self.cipher = Some(Ctr128BE::new(&key, iv.into()));
-        Ok(())
-    }
-
-    fn encrypt_one(
-        &mut self,
+    fn encrypt(
+        &self,
         nonce: &[u8],
         _aad: &[&[u8]],
         buf: &mut [u8],
@@ -194,21 +179,8 @@ where
             .map_err(|_| Error::CipherFail)
     }
 
-    fn decrypt_one(&mut self, nonce: &[u8], aad: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error> {
-        self.encrypt_one(nonce, aad, buf, buf.len())
-    }
-
-    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
-        self.cipher
-            .as_mut()
-            .ok_or(Error::CipherFail)?
-            .try_apply_keystream(&mut buf[..pt_size])
-            .map(|_| pt_size)
-            .map_err(|_| Error::CipherFail)
-    }
-
-    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        self.encrypt(buf, buf.len())
+    fn decrypt(&self, nonce: &[u8], aad: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error> {
+        self.encrypt(nonce, aad, buf, buf.len())
     }
 }
 
@@ -376,13 +348,13 @@ mod tests {
         // Verify correct encryption
         let mut enc_buffer = [0u8; 16];
         enc_buffer[..pt.len()].copy_from_slice(&pt);
-        let ct_size = cipher.encrypt_one(&nonce, &[&aad], &mut enc_buffer, pt.len())?;
+        let ct_size = cipher.encrypt(&nonce, &[&aad], &mut enc_buffer, pt.len())?;
         assert_eq!(ct_size, ct.len());
         assert_eq!(enc_buffer, ct);
 
         // Verify correct decryption
         cipher.reset();
-        let pt_size = cipher.decrypt_one(&nonce, &[&aad], &mut enc_buffer)?;
+        let pt_size = cipher.decrypt(&nonce, &[&aad], &mut enc_buffer)?;
         assert_eq!(pt_size, pt.len());
         assert_eq!(&enc_buffer[..pt_size], &pt);
 

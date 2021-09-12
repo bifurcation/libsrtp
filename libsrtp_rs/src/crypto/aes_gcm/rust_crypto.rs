@@ -12,12 +12,13 @@ where
     C: AeadCore,
 {
     key_size: AesKeySize,
-    key: [u8; 32],
     cipher: C,
     salt: [u8; 12],
+    /*
     aad: [u8; 512],
     aad_size: usize,
     nonce: Option<Nonce<C::NonceSize>>,
+    */
 }
 
 impl<C> Reset for Context<C>
@@ -25,9 +26,11 @@ where
     C: AeadCore,
 {
     fn reset(&mut self) {
+        /*
         self.aad.fill(0);
         self.aad_size = 0;
         self.nonce = None;
+        */
     }
 }
 
@@ -37,7 +40,6 @@ where
 {
     const SALT_SIZE: usize = 12;
     const TAG_SIZE: usize = 16;
-    const MAX_AAD_SIZE: usize = 512;
 
     fn new(key_size: AesKeySize, key: &[u8], salt: &[u8]) -> Result<Self, Error> {
         if key.len() != key_size.into() || salt.len() != Self::SALT_SIZE {
@@ -46,15 +48,10 @@ where
 
         let mut ctx = Context {
             key_size: key_size,
-            key: [0; 32],
             cipher: C::new(Key::from_slice(key)),
             salt: [0; 12],
-            aad: [0; 512],
-            aad_size: 0,
-            nonce: None,
         };
 
-        ctx.key[..key.len()].copy_from_slice(key);
         ctx.salt.copy_from_slice(salt);
         Ok(ctx)
     }
@@ -70,10 +67,6 @@ where
 
     fn overhead(&self) -> usize {
         Self::TAG_SIZE
-    }
-
-    fn salt(&self) -> Vec<u8> {
-        self.salt.clone().into()
     }
 
     // https://datatracker.ietf.org/doc/html/rfc7714#section-8.3
@@ -126,24 +119,8 @@ where
         self.rtp_nonce(ssrc, index.into(), nonce)
     }
 
-    fn add_aad(&mut self, aad: &[u8]) -> Result<(), Error> {
-        let new_aad_size = self.aad_size + aad.len();
-        if new_aad_size > Self::MAX_AAD_SIZE {
-            return Err(Error::CipherFail);
-        }
-
-        self.aad[self.aad_size..new_aad_size].copy_from_slice(aad);
-        self.aad_size = new_aad_size;
-        Ok(())
-    }
-
-    fn set_nonce(&mut self, nonce: &[u8]) -> Result<(), Error> {
-        self.nonce = Some(Nonce::clone_from_slice(&nonce));
-        Ok(())
-    }
-
-    fn encrypt_one(
-        &mut self,
+    fn encrypt(
+        &self,
         nonce_in: &[u8],
         aad_in: &[&[u8]],
         buf: &mut [u8],
@@ -176,21 +153,10 @@ where
             .map_err(|_| Error::CipherFail)?;
 
         buf[pt_size..ct_size].copy_from_slice(&tag);
-
-        println!("enc key: {:02x?}", self.key);
-        println!("enc nonce: {:02x?}", nonce_in);
-        println!("enc aad: {:02x?}", &aad_buf[..aad_size]);
-        println!("enc ct: {:02x?}", &buf[..ct_size]);
-
         Ok(ct_size)
     }
 
-    fn decrypt_one(
-        &mut self,
-        nonce_in: &[u8],
-        aad_in: &[&[u8]],
-        buf: &mut [u8],
-    ) -> Result<usize, Error> {
+    fn decrypt(&self, nonce_in: &[u8], aad_in: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error> {
         let ct_size = buf.len();
         if ct_size < Self::TAG_SIZE {
             return Err(Error::BadParam);
@@ -209,11 +175,6 @@ where
             aad_size = new_aad_size;
         }
 
-        println!("dec key: {:02x?}", self.key);
-        println!("dec nonce: {:02x?}", nonce_in);
-        println!("dec aad: {:02x?}", &aad_buf[..aad_size]);
-        println!("dec ct: {:02x?}", &buf[..ct_size]);
-
         // Decrypt in place
         let pt_size = ct_size - Self::TAG_SIZE;
         let mut tag = [0u8; 16];
@@ -221,51 +182,13 @@ where
         let tag = GenericArray::from_slice(&tag);
 
         let nonce = Nonce::clone_from_slice(nonce_in);
-        let aad = &aad_buf[..self.aad_size];
+        let aad = &aad_buf[..aad_size];
         self.cipher
             .decrypt_in_place_detached(&nonce, aad, &mut buf[..pt_size], tag)
             .map_err(|e| {
                 println!("Error: {:?}", e);
                 Error::AuthFail
             })?;
-        buf[pt_size..].fill(0);
-        Ok(pt_size)
-    }
-
-    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
-        let ct_size = pt_size + Self::TAG_SIZE;
-        if buf.len() < ct_size {
-            return Err(Error::BadParam);
-        }
-
-        let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
-        let aad = &self.aad[..self.aad_size];
-        let tag = self
-            .cipher
-            .encrypt_in_place_detached(nonce, aad, &mut buf[..pt_size])
-            .map_err(|_| Error::CipherFail)?;
-
-        buf[pt_size..ct_size].copy_from_slice(&tag);
-        Ok(ct_size)
-    }
-
-    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        let ct_size = buf.len();
-        if ct_size < Self::TAG_SIZE {
-            return Err(Error::BadParam);
-        }
-
-        let pt_size = ct_size - Self::TAG_SIZE;
-        let mut tag = [0u8; 16];
-        tag.copy_from_slice(&buf[pt_size..]);
-        let tag = GenericArray::from_slice(&tag);
-
-        let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
-        let aad = &self.aad[..self.aad_size];
-
-        self.cipher
-            .decrypt_in_place_detached(nonce, aad, &mut buf[..pt_size], tag)
-            .map_err(|_| Error::AuthFail)?;
         buf[pt_size..].fill(0);
         Ok(pt_size)
     }

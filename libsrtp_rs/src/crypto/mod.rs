@@ -212,9 +212,6 @@ pub trait Cipher: Reset {
     fn id(&self) -> CipherTypeID;
     fn overhead(&self) -> usize;
 
-    // XXX(RLB) This is only exposed so that the C interface glue code can use it
-    fn salt(&self) -> Vec<u8>;
-
     fn rtp_nonce(
         &self,
         ssrc: u32,
@@ -223,36 +220,15 @@ pub trait Cipher: Reset {
     ) -> Result<usize, Error>;
     fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error>;
 
-    // XXX(RLB) Note:
-    // * `&mut self` to match the C tests' expectations of ciphers
-    // * `aad: &[&[u8]]` to allow for SRTCP's discontiguous AAD
-    fn encrypt_one(
-        &mut self,
+    // XXX(RLB) Note: `aad: &[&[u8]]` to allow for SRTCP's discontiguous AAD
+    fn encrypt(
+        &self,
         nonce: &[u8],
         aad: &[&[u8]],
         buf: &mut [u8],
         pt_size: usize,
     ) -> Result<usize, Error>;
-    fn decrypt_one(&mut self, nonce: &[u8], aad: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error>;
-
-    // XXX(RLB) It would be cleaner just to have a more modern Seal/Open interface here.  The
-    // incremental interface is here for two reasons:
-    //
-    // * Because AAD for SRTCP is disaggregated, providing AAD incrementally allows us to push the
-    //   cost of disaggregation down the stack, where it can be handled more elegantly.
-    //
-    // * While we provide a C-level crypto interface for interop verification, it is simpler to
-    //   have the incremental API so that we can just pass through calls.
-    //
-    // So even once we tear down the C-level crypto interface scaffolding, we will still have the
-    // disaggregated AAD problem.
-    fn add_aad(&mut self, aad: &[u8]) -> Result<(), Error>;
-    fn set_nonce(&mut self, iv: &[u8]) -> Result<(), Error>;
-
-    // XXX(RLB) The mutability of self on encrypt/decrypt is required to match the C tests'
-    // expectations of ciphers.  It is not required for the Rust SRTP implementation.
-    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error>;
-    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error>;
+    fn decrypt(&self, nonce: &[u8], aad: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error>;
 }
 
 impl Reset for Box<dyn Cipher> {

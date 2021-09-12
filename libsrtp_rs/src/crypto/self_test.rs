@@ -122,9 +122,7 @@ impl CipherTest {
         enc_buffer[..pt_size].copy_from_slice(self.plaintext);
 
         cipher.reset();
-        cipher.add_aad(self.aad)?;
-        cipher.set_nonce(self.nonce)?;
-        let enc_len = cipher.encrypt(enc_buffer, pt_size)?;
+        let enc_len = cipher.encrypt(self.nonce, &[self.aad], enc_buffer, pt_size)?;
         if enc_len != ct_size {
             return Err(Error::AlgoFail);
         }
@@ -138,9 +136,7 @@ impl CipherTest {
         dec_buffer.copy_from_slice(self.ciphertext);
 
         cipher.reset();
-        cipher.add_aad(self.aad)?;
-        cipher.set_nonce(self.nonce)?;
-        let dec_len = cipher.decrypt(dec_buffer)?;
+        let dec_len = cipher.decrypt(self.nonce, &[self.aad], dec_buffer)?;
         if dec_len != pt_size {
             return Err(Error::AlgoFail);
         }

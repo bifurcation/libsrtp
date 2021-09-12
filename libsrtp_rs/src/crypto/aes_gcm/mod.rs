@@ -66,17 +66,13 @@ mod tests {
         enc_buffer[..pt.len()].copy_from_slice(&pt);
 
         cipher.reset();
-        cipher.add_aad(&aad)?;
-        cipher.set_nonce(&nonce)?;
-        let ct_size = cipher.encrypt(&mut enc_buffer, pt.len())?;
+        let ct_size = cipher.encrypt(&nonce, &[&aad], &mut enc_buffer, pt.len())?;
         assert_eq!(ct_size, ct.len());
         assert_eq!(enc_buffer, ct);
 
         // Verify correct decryption
         cipher.reset();
-        cipher.add_aad(&aad)?;
-        cipher.set_nonce(&nonce)?;
-        let pt_size = cipher.decrypt(&mut enc_buffer)?;
+        let pt_size = cipher.decrypt(&nonce, &[&aad], &mut enc_buffer)?;
         assert_eq!(pt_size, pt.len());
         assert_eq!(&enc_buffer[..pt_size], &pt);
 
