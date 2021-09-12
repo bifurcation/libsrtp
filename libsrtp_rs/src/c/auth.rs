@@ -14,10 +14,52 @@ use hex_literal::hex;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 
+const BUFFER_SIZE: usize = 2048;
+
 pub struct SrtpAuthState {
     auth_type: Box<dyn AuthType>,
     tag_size: usize,
     auth: Option<Box<dyn Auth>>,
+    data: [u8; BUFFER_SIZE],
+    data_size: usize,
+}
+
+impl SrtpAuthState {
+    fn new(auth_type: Box<dyn AuthType>, tag_size: usize) -> Self {
+        Self {
+            auth_type: auth_type,
+            tag_size: tag_size,
+            auth: None,
+            data: [0; BUFFER_SIZE],
+            data_size: 0,
+        }
+    }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.auth.as_mut().ok_or(Error::BadParam)?.reset();
+        self.data.fill(0);
+        self.data_size = 0;
+        Ok(())
+    }
+
+    fn update(&mut self, buf: &[u8]) -> Result<(), Error> {
+        let new_data_size = self.data_size + buf.len();
+        if new_data_size > self.data.len() {
+            return Err(Error::BadParam);
+        }
+
+        self.data[self.data_size..new_data_size].copy_from_slice(buf);
+        self.data_size = new_data_size;
+        Ok(())
+    }
+
+    fn compute(&mut self, buf: &[u8], tag: &mut [u8]) -> Result<(), Error> {
+        self.update(buf)?;
+
+        let auth = self.auth.as_mut().ok_or(Error::BadParam)?;
+        let data = &self.data[..self.data_size];
+        auth.compute(&[data], tag)
+    }
 }
 
 pub type srtp_auth_type_id_t = c_int;
@@ -123,12 +165,7 @@ fn auth_alloc(
     out_len: c_int,
     prefix_len: c_int,
 ) -> Error {
-    let state = Box::new(SrtpAuthState {
-        auth_type: auth_type,
-        tag_size: out_len as usize,
-        auth: None,
-    });
-
+    let state = Box::new(SrtpAuthState::new(auth_type, out_len as usize));
     let srtp_auth = Box::new(srtp_auth_t {
         type_: srtp_auth_type,
         state: Box::into_raw(state),
@@ -167,14 +204,7 @@ extern "C" fn auth_compute(
     let state = unsafe { state_ptr.as_mut().unwrap() };
     let buffer = unsafe { std::slice::from_raw_parts(buffer_ptr, octets_to_auth as usize) };
     let tag = unsafe { std::slice::from_raw_parts_mut(tag_ptr, tag_len as usize) };
-
-    let auth = state.auth.as_mut().unwrap();
-    match auth.update(buffer) {
-        Ok(_) => {}
-        Err(err) => return err,
-    };
-
-    just_error(auth.compute(tag))
+    just_error(state.compute(buffer, tag))
 }
 
 extern "C" fn auth_update(
@@ -183,14 +213,13 @@ extern "C" fn auth_update(
     octets_to_auth: c_int,
 ) -> Error {
     let state = unsafe { state_ptr.as_mut().unwrap() };
-    let buf_slice = unsafe { std::slice::from_raw_parts(buffer_ptr, octets_to_auth as usize) };
-    just_error(state.auth.as_mut().unwrap().update(buf_slice))
+    let buffer = unsafe { std::slice::from_raw_parts(buffer_ptr, octets_to_auth as usize) };
+    just_error(state.update(buffer))
 }
 
 extern "C" fn auth_start(state_ptr: *mut SrtpAuthState) -> Error {
     let state = unsafe { state_ptr.as_mut().unwrap() };
-    state.auth.as_mut().unwrap().reset();
-    Error::Ok
+    just_error(state.reset())
 }
 
 //
@@ -384,11 +413,7 @@ pub fn make_auth_t(at: Box<dyn AuthType>, key_len: c_int, tag_len: c_int) -> srt
         id: at.id() as srtp_auth_type_id_t,
     });
 
-    let state = SrtpAuthState {
-        auth_type: at,
-        tag_size: tag_len as usize,
-        auth: None,
-    };
+    let state = SrtpAuthState::new(at, tag_len as usize);
 
     srtp_auth_t {
         type_: Box::into_raw(auth_type),

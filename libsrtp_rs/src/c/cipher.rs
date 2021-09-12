@@ -18,9 +18,149 @@ use rand::RngCore;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_uint};
 
+const MAX_SALT_SIZE: usize = 14;
+const MAX_NONCE_SIZE: usize = 16;
+const MAX_AAD_SIZE: usize = 2048;
+
 pub struct SrtpCipherState {
     cipher_type: Box<dyn CipherType>,
     cipher: Option<Box<dyn Cipher>>,
+    salt: [u8; MAX_SALT_SIZE],
+    salt_size: usize,
+    nonce: [u8; MAX_NONCE_SIZE],
+    nonce_size: usize,
+    aad: [u8; MAX_AAD_SIZE],
+    aad_size: usize,
+    buffering: bool,
+    encrypted_so_far: usize,
+}
+
+impl SrtpCipherState {
+    fn new(cipher_type: Box<dyn CipherType>) -> Self {
+        let buffering = match cipher_type.id() {
+            CipherTypeID::AesIcm128 | CipherTypeID::AesIcm192 | CipherTypeID::AesIcm256 => true,
+            _ => false,
+        };
+
+        Self {
+            cipher_type: cipher_type,
+            cipher: None,
+            salt: Default::default(),
+            salt_size: 0,
+            nonce: Default::default(),
+            nonce_size: 0,
+            aad: [0; 2048],
+            aad_size: 0,
+            buffering: buffering,
+            encrypted_so_far: 0,
+        }
+    }
+
+    fn init(&mut self, key: &[u8], salt: &[u8]) -> Result<(), Error> {
+        if salt.len() > self.salt.len() {
+            return Err(Error::BadParam);
+        }
+
+        self.salt[..salt.len()].copy_from_slice(salt);
+        self.salt_size = salt.len();
+
+        self.cipher = Some(self.cipher_type.create(key, salt)?);
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        // salt is not reset
+        self.nonce.fill(0);
+        self.nonce_size = 0;
+        self.aad.fill(0);
+        self.aad_size = 0;
+        self.encrypted_so_far = 0;
+    }
+
+    fn set_nonce(&mut self, nonce: &[u8]) -> Result<(), Error> {
+        if nonce.len() > self.nonce.len() {
+            return Err(Error::BadParam);
+        }
+
+        self.nonce.fill(0);
+        self.nonce[..nonce.len()].copy_from_slice(nonce);
+        self.nonce_size = nonce.len();
+
+        // XXX(RLB) The C ciphers do XOR with salt internally (but only for non-AEAD ciphers!); the
+        // Rust ones never do.  So we need to align the semantics here in order to meet the
+        // expectations of the C code.
+        let cipher = self.cipher.as_ref().ok_or(Error::BadParam)?;
+        match cipher.id() {
+            CipherTypeID::AesGcm128 | CipherTypeID::AesGcm256 => {}
+            _ => {
+                let nonce = &mut self.nonce[..self.salt_size];
+                let salt = &self.salt[..self.salt_size];
+                xor_eq(nonce, salt);
+            }
+        }
+        Ok(())
+    }
+
+    fn nonce(&self) -> &[u8] {
+        &self.nonce[..self.nonce_size]
+    }
+
+    fn set_aad(&mut self, aad: &[u8]) -> Result<(), Error> {
+        let new_aad_size = self.aad_size + aad.len();
+        if new_aad_size > self.aad.len() {
+            return Err(Error::BadParam);
+        }
+
+        self.aad[self.aad_size..new_aad_size].copy_from_slice(aad);
+        self.aad_size = new_aad_size;
+        Ok(())
+    }
+
+    fn aad(&self) -> &[u8] {
+        &self.aad[..self.aad_size]
+    }
+
+    fn encrypt(&mut self, pt: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+        let cipher = self.cipher.as_ref().ok_or(Error::CipherFail)?;
+
+        // Emulate buffering behavior if required
+        if self.buffering {
+            let buffered_size = self.encrypted_so_far + pt.len();
+            let mut buffered_pt = vec![0u8; buffered_size];
+            buffered_pt[self.encrypted_so_far..].copy_from_slice(pt);
+            let buffered_pt_size = self.encrypted_so_far + pt_size;
+            let buffered_ct_size = cipher.encrypt(
+                self.nonce(),
+                &[self.aad()],
+                &mut buffered_pt,
+                buffered_pt_size,
+            )?;
+            pt.copy_from_slice(&buffered_pt[self.encrypted_so_far..]);
+            let ct_size = buffered_ct_size - self.encrypted_so_far;
+            self.encrypted_so_far = buffered_ct_size;
+            return Ok(ct_size);
+        }
+
+        cipher.encrypt(self.nonce(), &[self.aad()], pt, pt_size)
+    }
+
+    fn decrypt(&mut self, ct: &mut [u8]) -> Result<usize, Error> {
+        let cipher = self.cipher.as_ref().ok_or(Error::CipherFail)?;
+
+        // Emulate buffering behavior if required
+        if self.buffering {
+            let buffered_size = self.encrypted_so_far + ct.len();
+            let mut buffered_ct = vec![0u8; buffered_size];
+            buffered_ct[self.encrypted_so_far..].copy_from_slice(ct);
+            let buffered_pt_size = cipher.decrypt(self.nonce(), &[self.aad()], &mut buffered_ct)?;
+            ct.copy_from_slice(&buffered_ct[self.encrypted_so_far..]);
+            let pt_size = buffered_pt_size - self.encrypted_so_far;
+            self.encrypted_so_far = buffered_pt_size;
+            return Ok(pt_size);
+        }
+
+        cipher.decrypt(self.nonce(), &[self.aad()], ct)
+    }
 }
 
 pub type srtp_cipher_type_id_t = u32;
@@ -146,10 +286,7 @@ fn cipher_alloc(
     _tag_len: c_int,
 ) -> Error {
     let id = cipher_type.id();
-    let state = Box::new(SrtpCipherState {
-        cipher_type: cipher_type,
-        cipher: None,
-    });
+    let state = Box::new(SrtpCipherState::new(cipher_type));
 
     let srtp_cipher = Box::new(srtp_cipher_t {
         type_: srtp_cipher_type,
@@ -168,14 +305,7 @@ extern "C" fn cipher_init(state: *mut SrtpCipherState, key_ptr: *const u8) -> Er
     let key_with_salt = unsafe { std::slice::from_raw_parts(key_ptr, key_size_w_salt) };
     let key = &key_with_salt[..key_size];
     let salt = &key_with_salt[key_size..];
-
-    match state.cipher_type.create(key, salt) {
-        Err(err) => err,
-        Ok(cipher) => {
-            state.cipher = Some(cipher);
-            Error::Ok
-        }
-    }
+    just_error(state.init(key, salt))
 }
 
 extern "C" fn cipher_set_aad(
@@ -183,9 +313,9 @@ extern "C" fn cipher_set_aad(
     aad_ptr: *const u8,
     aad_len: u32,
 ) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
+    let state = unsafe { state.as_mut().unwrap() };
     let aad = unsafe { std::slice::from_raw_parts(aad_ptr, aad_len as usize) };
-    just_error(cipher.add_aad(aad))
+    just_error(state.set_aad(aad))
 }
 
 extern "C" fn cipher_encrypt(
@@ -193,13 +323,14 @@ extern "C" fn cipher_encrypt(
     buf_ptr: *mut u8,
     octets_to_encrypt: *mut c_uint,
 ) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
+    let state = unsafe { state.as_mut().unwrap() };
     let pt_size = unsafe { octets_to_encrypt.read() as usize };
     // Assume that the buffer has enough space for the cipher's overhead
+    let cipher = state.cipher.as_ref().unwrap();
     let buf_size = pt_size + cipher.overhead();
     let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr, buf_size) };
 
-    match cipher.encrypt(buf, pt_size) {
+    match state.encrypt(buf, pt_size) {
         Ok(len) => {
             unsafe { octets_to_encrypt.write(len as c_uint) };
             Error::Ok
@@ -213,16 +344,16 @@ extern "C" fn cipher_decrypt(
     buf_ptr: *mut u8,
     octets_to_decrypt: *mut c_uint,
 ) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
+    let state = unsafe { state.as_mut().unwrap() };
     let buf_size = unsafe { octets_to_decrypt.read() as usize };
     let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr, buf_size) };
 
-    let ct_size = match cipher.decrypt(buf) {
+    let pt_size = match state.decrypt(buf) {
         Ok(x) => x,
         Err(err) => return err,
     };
 
-    unsafe { octets_to_decrypt.write(ct_size as c_uint) };
+    unsafe { octets_to_decrypt.write(pt_size as c_uint) };
     Error::Ok
 }
 
@@ -231,25 +362,14 @@ extern "C" fn cipher_set_iv(
     iv_ptr: *mut u8,
     _direction: srtp_cipher_direction_t,
 ) -> Error {
-    let cipher = unsafe { state.as_mut().unwrap().cipher.as_mut().unwrap() };
+    let state = unsafe { state.as_mut().unwrap() };
+    let cipher = state.cipher.as_ref().unwrap();
     let iv = unsafe { std::slice::from_raw_parts_mut(iv_ptr, cipher.id().nonce_size()) };
 
     // XXX(RLB) This seems to be an implicit assumption of the C code
-    cipher.reset();
+    state.reset();
 
-    // XXX(RLB) The C ciphers do XOR with salt internally (but only for non-AEAD ciphers!); the
-    // Rust ones never do.  So we need to align the semantics here in order to meet the
-    // expectations of the C code.
-    let mut iv_buf = [0u8; 16];
-    let iv_copy = &mut iv_buf[..iv.len()];
-    iv_copy.copy_from_slice(iv);
-
-    match cipher.id() {
-        CipherTypeID::AesGcm128 | CipherTypeID::AesGcm256 => {}
-        _ => xor_eq(iv_copy, &cipher.salt()),
-    };
-
-    just_error(cipher.set_nonce(iv_copy))
+    just_error(state.set_nonce(iv))
 }
 
 extern "C" fn cipher_get_tag(_state: *mut SrtpCipherState, _tag: *mut u8, _len: *mut u32) -> Error {
@@ -712,10 +832,7 @@ pub fn make_cipher_t(ct: Box<dyn CipherType>) -> srtp_cipher_t {
     };
 
     let id = ct.id();
-    let state = SrtpCipherState {
-        cipher_type: ct,
-        cipher: None,
-    };
+    let state = SrtpCipherState::new(ct);
 
     let cipher_type = Box::new(srtp_cipher_type_t {
         alloc: None,
