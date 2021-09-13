@@ -13,7 +13,7 @@ debug = true
 
 [features]
 rust-crypto = ["hmac", "sha-1", "constant_time_eq"]
-openssl-crypto = ["openssl", "ouroboros"]
+openssl-crypto = ["openssl", "openssl-sys"]
 cffi = ["libc", "cstr", "cpu-time", "rand"]
 default = ["cffi", "rust-crypto"]
 
@@ -43,4 +43,4 @@ sha-1 = { version = "0.9.6", optional = true }
 
 # OpenSSL dependencies
 openssl = { version = "0.10", optional = true }
-ouroboros = { version = "0.10.1", optional = true }
+openssl-sys = { version = "0.9.66", optional = true }

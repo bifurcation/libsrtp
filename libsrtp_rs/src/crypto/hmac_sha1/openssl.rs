@@ -17,8 +17,6 @@ use openssl::sign::Signer;
 struct Context {
     tag_size: usize,
     key: PKey<Private>,
-    data: [u8; 2048],
-    data_size: usize,
 }
 
 impl Context {
@@ -26,17 +24,12 @@ impl Context {
         Ok(Self {
             tag_size: tag_size,
             key: PKey::hmac(key).map_err(|_| Error::CipherFail)?,
-            data: [0; 2048],
-            data_size: 0,
         })
     }
 }
 
 impl Reset for Context {
-    fn reset(&mut self) {
-        self.data.fill(0);
-        self.data_size = 0;
-    }
+    fn reset(&mut self) {}
 }
 
 impl Auth for Context {
@@ -44,35 +37,17 @@ impl Auth for Context {
         self.tag_size
     }
 
-    fn prefix_size(&self) -> usize {
-        0
-    }
-
-    fn start(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn update(&mut self, update: &[u8]) -> Result<(), Error> {
-        if update.len() + self.data_size > self.data.len() {
-            return Err(Error::CipherFail);
-        }
-
-        let new_data_size = self.data_size + update.len();
-        self.data[self.data_size..new_data_size].copy_from_slice(update);
-        self.data_size = new_data_size;
-        Ok(())
-    }
-
-    fn compute(&mut self, tag: &mut [u8]) -> Result<(), Error> {
+    fn compute(&mut self, inputs: &[&[u8]], tag: &mut [u8]) -> Result<(), Error> {
         if tag.len() != self.tag_size {
             return Err(Error::BadParam);
         }
 
         let mut signer =
             Signer::new(MessageDigest::sha1(), &self.key).map_err(|_| Error::CipherFail)?;
-        signer
-            .update(&self.data[..self.data_size])
-            .map_err(|_| Error::CipherFail)?;
+
+        for input in inputs {
+            signer.update(&input).map_err(|_| Error::CipherFail)?;
+        }
 
         let mut digest = [0u8; 20];
         signer.sign(&mut digest).map_err(|_| Error::CipherFail)?;

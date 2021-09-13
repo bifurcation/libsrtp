@@ -4,55 +4,224 @@ use crate::crypto::{xor_eq, Cipher, CipherType, CipherTypeID, Reset};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 
-use openssl::symm;
-use openssl::symm::{Crypter, Mode};
+use openssl_sys::*;
+use std::os::raw::{c_int, c_void};
 
-fn val_or_fail<T, E>(result: Result<T, E>) -> Result<T, Error> {
-    result.map_err(|_| Error::CipherFail)
+// Conveniences for dealing with pointers and errors
+fn non_null<T>(ptr: *mut T) -> Result<*mut T, Error> {
+    if ptr.is_null() {
+        Err(Error::Fail)
+    } else {
+        Ok(ptr)
+    }
 }
+
+fn require1(rv: c_int) -> Result<(), Error> {
+    if rv != 1 {
+        Err(Error::Fail)
+    } else {
+        Ok(())
+    }
+}
+
+// This is a simple RAII wrapper around EVP_CIPHER_CTX.
+struct EvpCipherContext {
+    ctx: *mut EVP_CIPHER_CTX,
+}
+
+impl Drop for EvpCipherContext {
+    fn drop(&mut self) {
+        if !self.ctx.is_null() {
+            unsafe { EVP_CIPHER_CTX_free(self.ctx) };
+        }
+    }
+}
+
+impl EvpCipherContext {
+    unsafe fn new(key_size: AesKeySize, key: &[u8]) -> Result<Self, Error> {
+        let ctx = non_null(EVP_CIPHER_CTX_new())?;
+
+        let evp = match key_size {
+            AesKeySize::Aes128 => EVP_aes_128_gcm(),
+            AesKeySize::Aes192 => EVP_aes_192_gcm(),
+            AesKeySize::Aes256 => EVP_aes_256_gcm(),
+        };
+
+        require1(EVP_CipherInit_ex(
+            ctx,
+            evp,
+            std::ptr::null_mut(),
+            key.as_ptr(),
+            std::ptr::null(),
+            0,
+        ))?;
+
+        Ok(Self { ctx: ctx })
+    }
+
+    unsafe fn set_nonce(&self, nonce: &[u8], encrypt: bool) -> Result<(), Error> {
+        let direction = if encrypt { 1 } else { 0 };
+
+        require1(EVP_CIPHER_CTX_ctrl(
+            self.ctx,
+            EVP_CTRL_GCM_SET_IVLEN,
+            12,
+            std::ptr::null_mut(),
+        ))?;
+
+        require1(EVP_CipherInit_ex(
+            self.ctx,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            nonce.as_ptr(),
+            direction,
+        ))
+    }
+
+    unsafe fn set_tag(&self, tag: &[u8]) -> Result<(), Error> {
+        require1(EVP_CIPHER_CTX_ctrl(
+            self.ctx,
+            EVP_CTRL_GCM_SET_TAG,
+            tag.len() as c_int,
+            tag.as_ptr() as *mut c_void,
+        ))
+    }
+
+    unsafe fn set_aad(&self, aad: &[u8]) -> Result<(), Error> {
+        let mut out_size: c_int = 0;
+        require1(EVP_CipherUpdate(
+            self.ctx,
+            std::ptr::null_mut(),
+            &mut out_size,
+            aad.as_ptr(),
+            aad.len() as c_int,
+        ))
+    }
+
+    unsafe fn encrypt(
+        &self,
+        pt: &mut [u8],
+        pt_size: usize,
+        tag_size: usize,
+    ) -> Result<usize, Error> {
+        let tag_end = pt_size + tag_size;
+
+        let mut out_size: c_int = pt_size as i32;
+        require1(EVP_CipherUpdate(
+            self.ctx,
+            pt.as_mut_ptr(),
+            &mut out_size,
+            pt.as_ptr(),
+            pt_size as c_int,
+        ))?;
+        require1(EVP_CipherFinal(
+            self.ctx,
+            std::ptr::null_mut(),
+            &mut out_size,
+        ))?;
+        require1(EVP_CIPHER_CTX_ctrl(
+            self.ctx,
+            EVP_CTRL_GCM_GET_TAG,
+            tag_size as c_int,
+            (&mut pt[pt_size..tag_end]).as_mut_ptr() as *mut c_void,
+        ))?;
+        Ok(pt_size + tag_size)
+    }
+
+    unsafe fn decrypt(&self, ct: &mut [u8]) -> Result<usize, Error> {
+        let mut out_size: c_int = ct.len() as i32;
+        require1(EVP_CipherUpdate(
+            self.ctx,
+            ct.as_mut_ptr(),
+            &mut out_size,
+            ct.as_ptr(),
+            out_size,
+        ))?;
+        require1(EVP_CipherFinal(
+            self.ctx,
+            std::ptr::null_mut(),
+            &mut out_size,
+        ))?;
+        Ok(ct.len())
+    }
+    /*
+
+    EVP_CipherInit_ex(c->ctx, evp, NULL, key, NULL, 0);
+
+    // Set IV
+    EVP_CIPHER_CTX_ctrl(c->ctx, EVP_CTRL_GCM_SET_IVLEN, 12, 0);
+    EVP_CipherInit_ex(c->ctx, NULL, NULL, NULL, iv,
+                       (c->dir == srtp_direction_encrypt ? 1 : 0));
+
+    // Set AAD
+    if (c->dir == srtp_direction_decrypt) {
+        /*
+         * Set dummy tag, OpenSSL requires the Tag to be set before
+         * processing AAD
+         */
+
+        /*
+         * OpenSSL never write to address pointed by the last parameter of
+         * EVP_CIPHER_CTX_ctrl while EVP_CTRL_GCM_SET_TAG (in reality,
+         * OpenSSL copy its content to the context), so we can make
+         * aad read-only in this function and all its wrappers.
+         */
+        unsigned char dummy_tag[GCM_AUTH_TAG_LEN];
+        memset(dummy_tag, 0x0, GCM_AUTH_TAG_LEN);
+        if (!EVP_CIPHER_CTX_ctrl(c->ctx, EVP_CTRL_GCM_SET_TAG, c->tag_len,
+                                 &dummy_tag)) {
+            return (srtp_err_status_algo_fail);
+        }
+    }
+
+    rv = EVP_Cipher(c->ctx, NULL, aad, aad_len);
+
+    // Encrypt
+    EVP_Cipher(c->ctx, buf, buf, *enc_len);
+    EVP_Cipher(c->ctx, NULL, NULL, 0);
+    if (!EVP_CIPHER_CTX_ctrl(c->ctx, EVP_CTRL_GCM_GET_TAG, c->tag_len, buf)) {
+        return (srtp_err_status_algo_fail);
+    }
+
+    // Dealloc
+    EVP_CIPHER_CTX_free(ctx);
+
+    */
+}
+
+///////////
+///////////
+///////////
 
 struct Context {
     key_size: AesKeySize,
-    cipher: symm::Cipher,
-    key: [u8; 32],
-    salt: [u8; 12],
-    nonce: Option<[u8; 12]>,
-    aad: [u8; 512],
-    aad_size: usize,
+    ctx: EvpCipherContext,
+    key: [u8; Self::MAX_KEY_SIZE],
+    salt: [u8; Self::SALT_SIZE],
 }
 
 impl Reset for Context {
     fn reset(&mut self) {
-        self.nonce = None;
-        self.aad.fill(0);
-        self.aad_size = 0;
+        self.ctx = unsafe { EvpCipherContext::new(self.key_size, self.key()).unwrap() };
     }
 }
 
 impl Context {
+    const MAX_KEY_SIZE: usize = 32;
     const SALT_SIZE: usize = 12;
     const TAG_SIZE: usize = 16;
-    const MAX_AAD_SIZE: usize = 512;
 
     fn new(key_size: AesKeySize, key: &[u8], salt: &[u8]) -> Result<Self, Error> {
         if key.len() != key_size.into() || salt.len() != Self::SALT_SIZE {
             return Err(Error::BadParam);
         }
 
-        let cipher = match key_size {
-            AesKeySize::Aes128 => symm::Cipher::aes_128_gcm(),
-            AesKeySize::Aes192 => symm::Cipher::aes_192_gcm(),
-            AesKeySize::Aes256 => symm::Cipher::aes_256_gcm(),
-        };
-
         let mut ctx = Context {
             key_size: key_size,
-            cipher: cipher,
+            ctx: unsafe { EvpCipherContext::new(key_size, key)? },
             key: [0; 32],
             salt: [0; 12],
-            nonce: None,
-            aad: [0; 512],
-            aad_size: 0,
         };
 
         ctx.key[..key.len()].copy_from_slice(key);
@@ -64,10 +233,6 @@ impl Context {
         let key_size: usize = self.key_size.into();
         &self.key[..key_size]
     }
-
-    fn aad(&self) -> &[u8] {
-        &self.aad[..self.aad_size]
-    }
 }
 
 impl Cipher for Context {
@@ -77,10 +242,6 @@ impl Cipher for Context {
 
     fn overhead(&self) -> usize {
         Self::TAG_SIZE
-    }
-
-    fn salt(&self) -> Vec<u8> {
-        self.salt.clone().into()
     }
 
     // https://datatracker.ietf.org/doc/html/rfc7714#section-8.3
@@ -133,86 +294,45 @@ impl Cipher for Context {
         self.rtp_nonce(ssrc, index.into(), nonce)
     }
 
-    fn add_aad(&mut self, aad: &[u8]) -> Result<(), Error> {
-        let new_aad_size = self.aad_size + aad.len();
-        if new_aad_size > Self::MAX_AAD_SIZE {
-            return Err(Error::CipherFail);
-        }
-
-        self.aad[self.aad_size..new_aad_size].copy_from_slice(aad);
-        self.aad_size = new_aad_size;
-        Ok(())
-    }
-
-    fn set_nonce(&mut self, nonce: &[u8]) -> Result<(), Error> {
-        let mut nonce_copy = [0u8; Self::SALT_SIZE];
-        nonce_copy.copy_from_slice(nonce);
-        self.nonce = Some(nonce_copy);
-        Ok(())
-    }
-
-    fn encrypt(&mut self, buf: &mut [u8], pt_size: usize) -> Result<usize, Error> {
+    fn encrypt(
+        &self,
+        nonce: &[u8],
+        aad: &[&[u8]],
+        buf: &mut [u8],
+        pt_size: usize,
+    ) -> Result<usize, Error> {
         let ct_size = pt_size + Self::TAG_SIZE;
         if buf.len() < ct_size {
             return Err(Error::BadParam);
         }
 
-        let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
-        let mut crypter = val_or_fail(Crypter::new(
-            self.cipher,
-            Mode::Encrypt,
-            self.key(),
-            Some(nonce),
-        ))?;
+        unsafe {
+            self.ctx.set_nonce(nonce, true)?;
+            for elem in aad {
+                self.ctx.set_aad(elem)?;
+            }
 
-        val_or_fail(crypter.aad_update(self.aad()))?;
-        let count = unsafe {
-            // XXX(RLB) OpenSSL is fine with encrypting in place, but the Rust interface makes it
-            // impossible to do safely.  Note that we over-size the slice (ct_size) because the
-            // Rust wrapper checks that the output has a block size more than the input.
-            let out_ptr: *mut u8 = buf.as_mut_ptr();
-            let out = std::slice::from_raw_parts_mut(out_ptr, pt_size + Self::TAG_SIZE);
-            val_or_fail(crypter.update(buf, out))?
-        };
-        if count != pt_size {
-            return Err(Error::CipherFail);
+            self.ctx.encrypt(buf, pt_size, Self::TAG_SIZE)
         }
-
-        val_or_fail(crypter.finalize(&mut []))?;
-        val_or_fail(crypter.get_tag(&mut buf[pt_size..ct_size]))?;
-        Ok(ct_size)
     }
 
-    fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        let ct_size = buf.len();
-        if ct_size < Self::TAG_SIZE {
+    fn decrypt(&self, nonce: &[u8], aad: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error> {
+        if buf.len() < Self::TAG_SIZE {
             return Err(Error::BadParam);
         }
-        let pt_size = ct_size - Self::TAG_SIZE;
+        let pt_size = buf.len() - Self::TAG_SIZE;
 
-        let nonce = self.nonce.as_ref().ok_or(Error::BadParam)?;
-        let mut crypter = val_or_fail(Crypter::new(
-            self.cipher,
-            Mode::Decrypt,
-            self.key(),
-            Some(nonce),
-        ))?;
+        unsafe {
+            // The order of these operations matters to OpenSSL.  In particular, `set_tag` must
+            // come before `set_aad`.
+            self.ctx.set_nonce(nonce, false)?;
+            self.ctx.set_tag(&buf[pt_size..])?;
+            for elem in aad {
+                self.ctx.set_aad(elem)?;
+            }
 
-        val_or_fail(crypter.set_tag(&buf[pt_size..]))?;
-        val_or_fail(crypter.aad_update(self.aad()))?;
-
-        let count = unsafe {
-            // XXX(RLB) See comments above.
-            let out_ptr: *mut u8 = buf.as_mut_ptr();
-            let out = std::slice::from_raw_parts_mut(out_ptr, ct_size + Self::TAG_SIZE);
-            val_or_fail(crypter.update(buf, out))?
-        };
-        if count != pt_size {
-            return Err(Error::CipherFail);
+            self.ctx.decrypt(&mut buf[..pt_size])
         }
-
-        val_or_fail(crypter.finalize(&mut []))?;
-        Ok(pt_size)
     }
 }
 
