@@ -79,12 +79,12 @@ where
     }
 
     fn init(&mut self, ssrc: u32, ext_seq_num: ExtendedSequenceNumber) -> Result<(), Error> {
-        let mut iv = [0u8; constants::NONCE_SIZE];
-        make_rtp_nonce(&self.salt, ssrc, ext_seq_num, &mut iv)?;
+        let mut nonce = [0u8; constants::NONCE_SIZE];
+        make_rtp_nonce(&self.salt, ssrc, ext_seq_num, &mut nonce)?;
 
-        let iv = GenericArray::from_slice(&iv);
         let key = GenericArray::from_slice(self.key());
-        self.cipher = Some(Ctr128BE::new(&key, iv.into()));
+        let nonce = GenericArray::from_slice(&nonce);
+        self.cipher = Some(Ctr128BE::new(&key, nonce.into()));
         Ok(())
     }
 
@@ -161,8 +161,8 @@ pub struct AesIcm {
 }
 
 impl AesIcm {
-    pub fn new(key_size: AesKeySize) -> Self {
-        AesIcm { key_size: key_size }
+    pub fn new(key_size: AesKeySize) -> Result<Self, Error> {
+        Ok(AesIcm { key_size: key_size })
     }
 }
 

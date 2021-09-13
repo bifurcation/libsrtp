@@ -16,7 +16,9 @@ use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 
 mod constants {
+    pub const SALT_SIZE: usize = 14;
     pub const NONCE_SIZE: usize = 16;
+    pub const TAG_SIZE: usize = 0;
 }
 
 // https://datatracker.ietf.org/doc/html/rfc3711#section-4.1.1
@@ -57,7 +59,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_128() -> Result<(), Error> {
-        let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes128));
+        let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes128)?);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm128);
 
         let tests_passed = self_test::cipher(cipher_type.as_ref())?;
@@ -68,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_192() -> Result<(), Error> {
-        let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes192));
+        let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes192)?);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm192);
 
         let tests_passed = self_test::cipher(cipher_type.as_ref())?;
@@ -79,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_256() -> Result<(), Error> {
-        let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes256));
+        let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes256)?);
         assert_eq!(cipher_type.id(), CipherTypeID::AesIcm256);
 
         let tests_passed = self_test::cipher(cipher_type.as_ref())?;
@@ -90,7 +92,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_128_xtn() -> Result<(), Error> {
-        let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes128));
+        let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes128)?);
         assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm128);
 
         let tests_passed = self_test::xtn_cipher(cipher_type.as_ref())?;
@@ -101,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_192_xtn() -> Result<(), Error> {
-        let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes192));
+        let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes192)?);
         assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm192);
 
         let tests_passed = self_test::xtn_cipher(cipher_type.as_ref())?;
@@ -112,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_aes_icm_256_xtn() -> Result<(), Error> {
-        let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes256));
+        let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes256)?);
         assert_eq!(cipher_type.xtn_id(), ExtensionCipherTypeID::AesIcm256);
 
         let tests_passed = self_test::xtn_cipher(cipher_type.as_ref())?;
@@ -131,7 +133,7 @@ mod tests {
         let pt = hex!("17414273a475262748220000c8308e4655996386b395fb00");
         let ct = hex!("17588A9270F4E15E1C220000C8309546A994F0BC54789700");
 
-        let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes128));
+        let cipher_type: Box<dyn ExtensionCipherType> = Box::new(AesIcm::new(AesKeySize::Aes128)?);
         let mut cipher = cipher_type.xtn_create(&key, &salt)?;
 
         // Verify correct encryption
@@ -158,7 +160,7 @@ mod tests {
         let pt = [0xab; 16];
         let ct = hex!("4e55dc4ce79978d88ca4d215949d2402");
 
-        let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes128));
+        let cipher_type: Box<dyn CipherType> = Box::new(AesIcm::new(AesKeySize::Aes128)?);
         let mut cipher = cipher_type.create(&key, &salt)?;
 
         // Verify correct nonce formation

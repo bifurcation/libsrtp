@@ -18,6 +18,9 @@ pub(crate) mod null_auth;
 pub(crate) mod null_cipher;
 mod self_test;
 
+#[cfg(feature = "openssl-crypto")]
+mod openssl_common;
+
 use self::aes_gcm::AesGcm;
 use self::aes_icm::AesIcm;
 use self::hmac_sha1::HmacSha1;
@@ -339,15 +342,15 @@ impl CryptoKernel {
 
         // Extension cipher types
         kernel.load_xtn_cipher_type(Box::new(NullCipher {}))?;
-        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes128)))?;
-        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes192)))?;
-        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes256)))?;
+        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes128)?))?;
+        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes192)?))?;
+        kernel.load_xtn_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes256)?))?;
 
         // Cipher types
         kernel.load_cipher_type(Box::new(NullCipher {}))?;
-        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes128)))?;
-        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes192)))?;
-        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes256)))?;
+        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes128)?))?;
+        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes192)?))?;
+        kernel.load_cipher_type(Box::new(AesIcm::new(constants::AesKeySize::Aes256)?))?;
         kernel.load_cipher_type(Box::new(AesGcm::new(constants::AesKeySize::Aes128)?))?;
         kernel.load_cipher_type(Box::new(AesGcm::new(constants::AesKeySize::Aes256)?))?;
 
