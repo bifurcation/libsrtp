@@ -9,6 +9,49 @@ pub use rust_crypto::*;
 #[cfg(feature = "openssl-crypto")]
 pub use openssl_crypto::*;
 
+// Shared code across implementations
+
+use crate::crypto::xor_eq;
+use crate::replay::ExtendedSequenceNumber;
+use crate::srtp::Error;
+
+mod constants {
+    pub const SALT_SIZE: usize = 12;
+    pub const TAG_SIZE: usize = 16;
+}
+
+// https://datatracker.ietf.org/doc/html/rfc7714#section-8.3
+//
+//   0  0  0  0  0  0  0  0  0  0  1  1
+//   0  1  2  3  4  5  6  7  8  9  0  1
+// +--+--+--+--+--+--+--+--+--+--+--+--+
+// |00|00|    SSRC   |     ROC   | SEQ |---+
+// +--+--+--+--+--+--+--+--+--+--+--+--+   |
+//                                         |
+// +--+--+--+--+--+--+--+--+--+--+--+--+   |
+// |         Encryption Salt           |->(+)
+// +--+--+--+--+--+--+--+--+--+--+--+--+   |
+//                                         |
+// +--+--+--+--+--+--+--+--+--+--+--+--+   |
+// |       Initialization Vector       |<--+
+// +--+--+--+--+--+--+--+--+--+--+--+--+
+fn make_rtp_nonce(
+    salt: &[u8],
+    ssrc: u32,
+    ext_seq_num: ExtendedSequenceNumber,
+    nonce: &mut [u8],
+) -> Result<usize, Error> {
+    if nonce.len() != constants::SALT_SIZE {
+        return Err(Error::BadParam);
+    }
+
+    nonce.fill(0);
+    nonce[2..6].copy_from_slice(&ssrc.to_be_bytes());
+    nonce[6..12].copy_from_slice(&ext_seq_num.to_be_bytes()[2..]);
+    xor_eq(nonce, salt);
+    Ok(salt.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

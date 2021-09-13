@@ -1,8 +1,10 @@
 #![cfg(feature = "rust-crypto")]
+use super::{constants, make_rtp_nonce};
 use crate::crypto::constants::AesKeySize;
-use crate::crypto::{xor_eq, Cipher, CipherType, CipherTypeID, Reset};
+use crate::crypto::{Cipher, CipherType, CipherTypeID, Reset};
 use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
+
 use aes_gcm::aead::{generic_array::GenericArray, AeadInPlace, NewAead};
 use aes_gcm::{AeadCore, Aes128Gcm, Aes256Gcm, Key, Nonce};
 
@@ -14,35 +16,21 @@ where
     key_size: AesKeySize,
     cipher: C,
     salt: [u8; 12],
-    /*
-    aad: [u8; 512],
-    aad_size: usize,
-    nonce: Option<Nonce<C::NonceSize>>,
-    */
 }
 
 impl<C> Reset for Context<C>
 where
     C: AeadCore,
 {
-    fn reset(&mut self) {
-        /*
-        self.aad.fill(0);
-        self.aad_size = 0;
-        self.nonce = None;
-        */
-    }
+    fn reset(&mut self) {}
 }
 
 impl<C> Context<C>
 where
     C: AeadCore + NewAead,
 {
-    const SALT_SIZE: usize = 12;
-    const TAG_SIZE: usize = 16;
-
     fn new(key_size: AesKeySize, key: &[u8], salt: &[u8]) -> Result<Self, Error> {
-        if key.len() != key_size.into() || salt.len() != Self::SALT_SIZE {
+        if key.len() != key_size.into() || salt.len() != constants::SALT_SIZE {
             return Err(Error::BadParam);
         }
 
@@ -66,55 +54,18 @@ where
     }
 
     fn overhead(&self) -> usize {
-        Self::TAG_SIZE
+        constants::TAG_SIZE
     }
 
-    // https://datatracker.ietf.org/doc/html/rfc7714#section-8.3
-    //
-    //   0  0  0  0  0  0  0  0  0  0  1  1
-    //   0  1  2  3  4  5  6  7  8  9  0  1
-    // +--+--+--+--+--+--+--+--+--+--+--+--+
-    // |00|00|    SSRC   |     ROC   | SEQ |---+
-    // +--+--+--+--+--+--+--+--+--+--+--+--+   |
-    //                                         |
-    // +--+--+--+--+--+--+--+--+--+--+--+--+   |
-    // |         Encryption Salt           |->(+)
-    // +--+--+--+--+--+--+--+--+--+--+--+--+   |
-    //                                         |
-    // +--+--+--+--+--+--+--+--+--+--+--+--+   |
-    // |       Initialization Vector       |<--+
-    // +--+--+--+--+--+--+--+--+--+--+--+--+
     fn rtp_nonce(
         &self,
         ssrc: u32,
         ext_seq_num: ExtendedSequenceNumber,
         nonce: &mut [u8],
     ) -> Result<usize, Error> {
-        if nonce.len() != self.id().salt_size() {
-            return Err(Error::BadParam);
-        }
-
-        nonce.fill(0);
-        nonce[2..6].copy_from_slice(&ssrc.to_be_bytes());
-        nonce[6..12].copy_from_slice(&ext_seq_num.to_be_bytes()[2..]);
-        xor_eq(nonce, &self.salt);
-        Ok(self.salt.len())
+        make_rtp_nonce(&self.salt, ssrc, ext_seq_num, nonce)
     }
 
-    // https://datatracker.ietf.org/doc/html/rfc7714#section-9.1
-    //
-    //   0  1  2  3  4  5  6  7  8  9 10 11
-    // +--+--+--+--+--+--+--+--+--+--+--+--+
-    // |00|00|    SSRC   |00|00|0+SRTCP Idx|---+
-    // +--+--+--+--+--+--+--+--+--+--+--+--+   |
-    //                                         |
-    // +--+--+--+--+--+--+--+--+--+--+--+--+   |
-    // |         Encryption Salt           |->(+)
-    // +--+--+--+--+--+--+--+--+--+--+--+--+   |
-    //                                         |
-    // +--+--+--+--+--+--+--+--+--+--+--+--+   |
-    // |       Initialization Vector       |<--+
-    // +--+--+--+--+--+--+--+--+--+--+--+--+
     fn rtcp_nonce(&self, ssrc: u32, index: u32, nonce: &mut [u8]) -> Result<usize, Error> {
         self.rtp_nonce(ssrc, index.into(), nonce)
     }
@@ -126,7 +77,7 @@ where
         buf: &mut [u8],
         pt_size: usize,
     ) -> Result<usize, Error> {
-        let ct_size = pt_size + Self::TAG_SIZE;
+        let ct_size = pt_size + constants::TAG_SIZE;
         if buf.len() < ct_size {
             return Err(Error::BadParam);
         }
@@ -158,7 +109,7 @@ where
 
     fn decrypt(&self, nonce_in: &[u8], aad_in: &[&[u8]], buf: &mut [u8]) -> Result<usize, Error> {
         let ct_size = buf.len();
-        if ct_size < Self::TAG_SIZE {
+        if ct_size < constants::TAG_SIZE {
             return Err(Error::BadParam);
         }
 
@@ -176,7 +127,7 @@ where
         }
 
         // Decrypt in place
-        let pt_size = ct_size - Self::TAG_SIZE;
+        let pt_size = ct_size - constants::TAG_SIZE;
         let mut tag = [0u8; 16];
         tag.copy_from_slice(&buf[pt_size..]);
         let tag = GenericArray::from_slice(&tag);
