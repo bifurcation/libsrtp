@@ -18,7 +18,6 @@ use crate::srtp::Error;
 mod constants {
     pub const SALT_SIZE: usize = 14;
     pub const NONCE_SIZE: usize = 16;
-    pub const TAG_SIZE: usize = 0;
 }
 
 // https://datatracker.ietf.org/doc/html/rfc3711#section-4.1.1

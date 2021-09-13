@@ -65,10 +65,16 @@ option(BUILD_SHARED_LIBS "Build shared library" OFF)
 
 if(ENABLE_RUST)
   find_package(Corrosion REQUIRED)
-  corrosion_import_crate(MANIFEST_PATH libsrtp_rs/Cargo.toml)
+
+  SET(CARGO_TOML "libsrtp_rs/Cargo.toml")
+  if (ENABLE_OPENSSL)
+    corrosion_import_crate(MANIFEST_PATH ${CARGO_TOML} NO_DEFAULT_FEATURES FEATURES cffi openssl-crypto)
+  else ()
+    corrosion_import_crate(MANIFEST_PATH ${CARGO_TOML} FEATURES cffi)
+  endif()
+
   set(RUST ${ENABLE_RUST} CACHE BOOL INTERNAL)
   set(GCM ${ENABLE_RUST} CACHE BOOL INTERNAL)
-  set(LIBSRTP_RS_INCLUDE_DIR "./libsrtp_rs/include" CACHE PATH INTERNAL)
 endif()
 
 if(ENABLE_OPENSSL OR ENABLE_MBEDTLS OR ENABLE_NSS)
@@ -138,7 +144,9 @@ if(NOT ENABLE_RUST)
   )
 endif()
 
-if(ENABLE_OPENSSL)
+if(ENABLE_RUST)
+  # No additional ciphers needed
+elseif(ENABLE_OPENSSL)
   list(APPEND CIPHERS_SOURCES_C
     crypto/cipher/aes_icm_ossl.c
     crypto/cipher/aes_gcm_ossl.c
@@ -153,7 +161,7 @@ elseif(ENABLE_NSS)
     crypto/cipher/aes_icm_nss.c
     crypto/cipher/aes_gcm_nss.c
   )
-elseif(NOT ENABLE_RUST)
+else()
   list(APPEND CIPHERS_SOURCES_C
     crypto/cipher/aes.c
     crypto/cipher/aes_icm.c
@@ -170,7 +178,9 @@ if(NOT ENABLE_RUST)
   )
 endif()
 
-if(ENABLE_OPENSSL)
+if(ENABLE_RUST)
+  # No additional ciphers needed
+elseif(ENABLE_OPENSSL)
   list(APPEND HASHES_SOURCES_C
     crypto/hash/hmac_ossl.c
   )
@@ -269,24 +279,30 @@ set_target_properties(srtp2 PROPERTIES VERSION ${CMAKE_PROJECT_VERSION})
 
 if(ENABLE_RUST)
   add_dependencies(srtp2 libsrtp_rs)
-  target_link_libraries(srtp2 PUBLIC libsrtp_rs)
-  target_include_directories(srtp2 PRIVATE ${LIBSRTP_RS_INCLUDE_DIR})
-endif()
+  
+  if(ENABLE_OPENSSL)
+    target_link_libraries(srtp2 PUBLIC libsrtp_rs OpenSSL::Crypto OpenSSL::SSL)
+  else()
+    target_link_libraries(srtp2 PUBLIC libsrtp_rs)
+  endif()
 
-target_include_directories(srtp2 PUBLIC crypto/include include)
-if(ENABLE_OPENSSL)
-  target_include_directories(srtp2 PRIVATE ${OPENSSL_INCLUDE_DIR})
-  target_link_libraries(srtp2 OpenSSL::Crypto)
-elseif(ENABLE_MBEDTLS)
-  target_include_directories(srtp2 PRIVATE ${MBEDTLS_INCLUDE_DIRS})
-  target_link_libraries(srtp2 ${MBEDTLS_LIBRARIES})
-elseif(ENABLE_NSS)
-  target_include_directories(srtp2 PRIVATE ${NSS_INCLUDE_DIRS})
-  target_link_libraries(srtp2 ${NSS_LIBRARIES})
-endif()
-if(WIN32)
-  target_link_libraries(srtp2 ws2_32)
-  target_compile_definitions(srtp2 PUBLIC _CRT_SECURE_NO_WARNINGS)
+  target_include_directories(srtp2 PUBLIC crypto/include include)
+else()
+  target_include_directories(srtp2 PUBLIC crypto/include include)
+  if(ENABLE_OPENSSL)
+    target_include_directories(srtp2 PRIVATE ${OPENSSL_INCLUDE_DIR})
+    target_link_libraries(srtp2 OpenSSL::Crypto)
+  elseif(ENABLE_MBEDTLS)
+    target_include_directories(srtp2 PRIVATE ${MBEDTLS_INCLUDE_DIRS})
+    target_link_libraries(srtp2 ${MBEDTLS_LIBRARIES})
+  elseif(ENABLE_NSS)
+    target_include_directories(srtp2 PRIVATE ${NSS_INCLUDE_DIRS})
+    target_link_libraries(srtp2 ${NSS_LIBRARIES})
+  endif()
+  if(WIN32)
+    target_link_libraries(srtp2 ws2_32)
+    target_compile_definitions(srtp2 PUBLIC _CRT_SECURE_NO_WARNINGS)
+  endif()
 endif()
 
 install(TARGETS srtp2 DESTINATION lib)

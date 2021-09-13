@@ -24,7 +24,7 @@ where
 {
     key_size: AesKeySize,
     key: [u8; 32],
-    salt: [u8; 14],
+    salt: [u8; constants::SALT_SIZE],
     cipher: Option<Ctr128BE<C>>,
 }
 

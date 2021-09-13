@@ -107,7 +107,7 @@ impl Cipher for Context {
     }
 
     fn overhead(&self) -> usize {
-        constants::TAG_SIZE
+        0
     }
 
     fn rtp_nonce(
@@ -132,7 +132,7 @@ impl Cipher for Context {
     ) -> Result<usize, Error> {
         unsafe {
             self.ctx.set_nonce(nonce, true)?;
-            self.ctx.encrypt(buf, pt_size, constants::TAG_SIZE)
+            self.ctx.encrypt(buf, pt_size, 0)
         }
     }
 

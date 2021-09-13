@@ -15,18 +15,18 @@ TODO
 * [X] Instead of SsrcType, make Ssrc an enum
 * [X] Re-enable C interfaces for everything-but-SRTP; pass tests
 * [X] Enable C interface for SRTP; pass tests
+* [X] Gate C interface behind a feature
+* [X] Crypto library agility (and integration into CMake)
+* [X] OpenSSL support
+* [X] Audit for `pub`
+* [X] Clean up modularization
 * [ ] Replicate all C tests in Rust
 * [ ] Debug logging
-* [X] Gate C interface behind a feature
 * [ ] Support for user data and event handlers in the C interface
 * [ ] Remove 'as' conversions
 * [ ] Build with `no_std` to the extent possible
 * [ ] Run `clippy` and implement suggestions
-* [ ] type SrtpResult<T> = Result<T, Error> 
-* [ ] Crypto library agility (and integration into CMake)
-* [ ] OpenSSL support
+* [ ] type SrtpResult<T> = Result<T, Error>
 * [ ] mBedTLS support
 * [ ] Use macros to clean up C interface code and make it safer
-* [ ] Audit for `pub` 
-* [ ] Clean up modularization
 

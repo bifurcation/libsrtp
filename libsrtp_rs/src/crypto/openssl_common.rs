@@ -152,11 +152,11 @@ impl EvpCipherContext {
             ct.as_ptr(),
             out_size,
         ))?;
-        require1(EVP_CipherFinal(
-            self.ctx,
-            std::ptr::null_mut(),
-            &mut out_size,
-        ))?;
+
+        let rv = EVP_CipherFinal(self.ctx, std::ptr::null_mut(), &mut out_size);
+        if rv != 1 {
+            return Err(Error::AuthFail);
+        }
         Ok(ct.len())
     }
 }

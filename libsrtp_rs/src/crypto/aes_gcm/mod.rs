@@ -16,8 +16,8 @@ use crate::replay::ExtendedSequenceNumber;
 use crate::srtp::Error;
 
 mod constants {
-    pub const SALT_SIZE: usize = 12;
     pub const TAG_SIZE: usize = 16;
+    pub const SALT_SIZE: usize = 12;
 }
 
 // https://datatracker.ietf.org/doc/html/rfc7714#section-8.3

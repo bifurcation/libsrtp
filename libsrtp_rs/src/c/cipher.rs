@@ -425,7 +425,11 @@ extern "C" fn aes_icm_128_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = Box::new(AesIcm::new(AesKeySize::Aes128));
+    let cipher_type = match AesIcm::new(AesKeySize::Aes128) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+    let cipher_type = Box::new(cipher_type);
     cipher_alloc(cipher_type, &srtp_aes_icm_128, cp, key_len, tag_len)
 }
 
@@ -496,7 +500,11 @@ extern "C" fn aes_icm_192_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = Box::new(AesIcm::new(AesKeySize::Aes192));
+    let cipher_type = match AesIcm::new(AesKeySize::Aes192) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+    let cipher_type = Box::new(cipher_type);
     cipher_alloc(cipher_type, &srtp_aes_icm_192, cp, key_len, tag_len)
 }
 
@@ -528,7 +536,11 @@ extern "C" fn aes_icm_256_alloc(
     key_len: c_int,
     tag_len: c_int,
 ) -> Error {
-    let cipher_type = Box::new(AesIcm::new(AesKeySize::Aes256));
+    let cipher_type = match AesIcm::new(AesKeySize::Aes256) {
+        Ok(x) => x,
+        Err(err) => return err,
+    };
+    let cipher_type = Box::new(cipher_type);
     cipher_alloc(cipher_type, &srtp_aes_icm_256, cp, key_len, tag_len)
 }
 
