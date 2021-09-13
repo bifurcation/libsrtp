@@ -1,4 +1,4 @@
-use crate::crypto::{constants, CipherInstance, CipherTypeID, CryptoKernel};
+use crate::crypto::{CipherInstance, CipherTypeID, CryptoKernel};
 use crate::srtp::Error;
 use num_enum::IntoPrimitive;
 
@@ -22,12 +22,14 @@ pub struct KDF {
 
 impl KDF {
     pub fn cipher_type(rtp: CipherTypeID, rtcp: CipherTypeID) -> CipherTypeID {
-        if rtp.key_size() <= constants::AES_128_KEY_LEN
-            && rtcp.key_size() <= constants::AES_128_KEY_LEN
-        {
-            CipherTypeID::AesIcm128
-        } else {
-            CipherTypeID::AesIcm256
+        match (rtp, rtcp) {
+            (CipherTypeID::Null, _) => CipherTypeID::AesIcm128,
+            (CipherTypeID::AesIcm128, _) => CipherTypeID::AesIcm128,
+            (CipherTypeID::AesGcm128, _) => CipherTypeID::AesIcm128,
+            (_, CipherTypeID::Null) => CipherTypeID::AesIcm128,
+            (_, CipherTypeID::AesIcm128) => CipherTypeID::AesIcm128,
+            (_, CipherTypeID::AesGcm128) => CipherTypeID::AesIcm128,
+            _ => CipherTypeID::AesIcm256,
         }
     }
 
