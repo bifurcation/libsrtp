@@ -1,5 +1,6 @@
 use crate::srtp::Error;
 use std::convert::TryFrom;
+use vob::Vob;
 
 #[derive(Clone)]
 struct Bitmask {
@@ -172,30 +173,20 @@ impl ExtSeqNum for ExtendedSequenceNumber {
 #[derive(Clone)]
 struct BitVector {
     bit_length: usize,
-    words: Box<[u64]>,
+    zero: usize,
+    bits: Box<Vob>,
 }
 
 impl BitVector {
-    const BITS_PER_BYTE: usize = 8;
-    const BYTES_PER_WORD: usize = 8;
-    const BITS_PER_WORD: usize = Self::BITS_PER_BYTE * Self::BYTES_PER_WORD;
-
     fn new(window_bits: usize) -> Result<Self, Error> {
         if window_bits == 0 {
             return Err(Error::BadParam);
         }
 
-        let window_bytes = window_bits / Self::BITS_PER_BYTE;
-        let extra_word: usize = if window_bytes % Self::BYTES_PER_WORD != 0 {
-            1
-        } else {
-            0
-        };
-        let word_size: usize = (window_bytes / Self::BYTES_PER_WORD) + extra_word;
-
         Ok(Self {
             bit_length: window_bits,
-            words: vec![0u64; word_size].into_boxed_slice(),
+            zero: 0,
+            bits: Box::new(Vob::from_elem(false, window_bits)),
         })
     }
 
@@ -203,46 +194,50 @@ impl BitVector {
         self.bit_length
     }
 
-    fn get(&self, bit: usize) -> bool {
+    fn rebase(&self, bit: usize) -> usize {
         assert!(bit < self.bit_length);
-        (self.words[bit / Self::BITS_PER_WORD] >> (bit % Self::BITS_PER_WORD)) & 1 == 1
+        if bit < self.bit_length - self.zero {
+            bit + self.zero
+        } else {
+            bit - (self.bit_length - self.zero)
+        }
+    }
+
+    fn get(&self, bit: usize) -> bool {
+        self.bits.get(self.rebase(bit)).unwrap()
     }
 
     fn set(&mut self, bit: usize) {
-        assert!(bit < self.bit_length);
-        self.words[bit / Self::BITS_PER_WORD] |= 1 << (bit % Self::BITS_PER_WORD);
+        self.bits.set(self.rebase(bit), true);
     }
 
     fn clear(&mut self) {
-        self.words.fill(0);
+        self.bits.set_all(false);
     }
 
     fn shift(&mut self, shift: usize) {
-        if shift > self.bit_length {
-            for w in self.words.iter_mut() {
-                *w = 0;
-            }
+        if shift >= self.bit_length {
+            self.clear();
+            self.zero = 0;
             return;
         }
 
-        let base_index = shift / Self::BITS_PER_WORD;
-        let bit_index = shift % Self::BITS_PER_WORD;
-        let word_length = self.words.len();
-
-        if bit_index == 0 {
-            for i in 0..(word_length - base_index) {
-                self.words[i] = self.words[i + base_index];
+        let new_zero = self.zero + shift;
+        if new_zero < self.bit_length {
+            let new_zero = self.zero + shift;
+            for i in self.zero..new_zero {
+                self.bits.set(i, false);
             }
+            self.zero = new_zero;
         } else {
-            for i in 0..(word_length - base_index - 1) {
-                self.words[i] = (self.words[i + base_index] >> bit_index)
-                    ^ (self.words[i + base_index + 1] << (Self::BITS_PER_WORD - bit_index));
+            let new_zero = new_zero - self.bit_length;
+            for i in self.zero..self.bit_length {
+                self.bits.set(i, false);
             }
-            self.words[word_length - base_index - 1] = self.words[word_length - 1] >> bit_index;
-        }
-
-        for i in (word_length - base_index)..word_length {
-            self.words[i] = 0;
+            for i in 0..new_zero {
+                self.bits.set(i, false);
+            }
+            self.zero = new_zero;
         }
     }
 }
