@@ -65,7 +65,7 @@ impl EvpCipherContext {
             0,
         ))?;
 
-        Ok(Self { ctx: ctx, gcm: gcm })
+        Ok(Self { ctx, gcm })
     }
 
     pub unsafe fn set_nonce(&self, nonce: &[u8], encrypt: bool) -> Result<(), Error> {

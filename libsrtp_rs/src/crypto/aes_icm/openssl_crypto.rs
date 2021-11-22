@@ -15,21 +15,19 @@ struct Context {
     id: CipherTypeID,
     key_size: AesKeySize,
     ctx: EvpCipherContext,
-    key: [u8; Self::MAX_KEY_SIZE],
     salt: [u8; constants::SALT_SIZE],
     encrypted_so_far: usize,
 }
 
 impl Reset for Context {
     fn reset(&mut self) {
-        self.ctx = unsafe { EvpCipherContext::new(self.id, self.key()).unwrap() };
+        // The context is automatically reset on set_nonce; there is no notion of reset without a
+        // new nonce.
         self.encrypted_so_far = 0;
     }
 }
 
 impl Context {
-    const MAX_KEY_SIZE: usize = 32;
-
     fn new(id: CipherTypeID, key_size: AesKeySize, key: &[u8], salt: &[u8]) -> Result<Self, Error> {
         if key.len() != id.key_size() || salt.len() != constants::SALT_SIZE {
             return Err(Error::BadParam);
@@ -39,18 +37,12 @@ impl Context {
             id: id,
             key_size: key_size,
             ctx: unsafe { EvpCipherContext::new(id, key)? },
-            key: [0; Self::MAX_KEY_SIZE],
             salt: [0; constants::SALT_SIZE],
             encrypted_so_far: 0,
         };
 
-        ctx.key[..key.len()].copy_from_slice(key);
         ctx.salt.copy_from_slice(salt);
         Ok(ctx)
-    }
-
-    fn key(&self) -> &[u8] {
-        &self.key[..self.key_size.into()]
     }
 }
 

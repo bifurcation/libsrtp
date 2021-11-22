@@ -89,7 +89,7 @@ impl<'a> OffsetReader<'a> {
 //   | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |
 //   |                                                                   |
 //   +- Encrypted Portion*                      Authenticated Portion ---+
-#[derive(PackedStruct)]
+#[derive(PackedStruct, Default)]
 #[packed_struct(bit_numbering = "msb0")]
 pub struct RtpHeader {
     #[packed_field(bits = "0..2")]
@@ -393,12 +393,44 @@ pub struct SrtpPacket<'a> {
 }
 
 impl<'a> SrtpPacket<'a> {
+    const SRTP_HEADER_SIZE: usize = 12;
+
     pub fn new(data: &'a mut [u8], pkt_len: usize) -> Result<Self, Error> {
+        // Manually parse the required values from the header
+        if pkt_len < Self::SRTP_HEADER_SIZE {
+            return Err(Error::Fail); // TODO(RLB) Better error
+        }
+
+        let x = data[0] & 0x10 == 0x10;
+        let cc: usize = (data[0] & 0x0f) as usize;
+        let seq = u16::from_be_bytes([data[2], data[3]]);
+        let ssrc = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
+
+        let header = RtpHeader {
+            v: 0,
+            p: 0,
+            x: if x { 1 } else { 0 },
+            cc: cc as u8,
+            m: 0,
+            pt: 0,
+            seq: seq,
+            ts: 0,
+            ssrc: ssrc,
+        };
+
+        let header_end = Self::SRTP_HEADER_SIZE + (4 * cc);
+        let mut r = OffsetReader::new(&mut data[header_end..pkt_len]);
+
+        // XXX(RLB): This code is more elegant than the above, but also pretty wasteful, since it
+        // parses several bit-packed fields that are never used.  I've left it here in case we
+        // decide that the performance hit is not too bad.
+        /*
         let mut r = OffsetReader::new(&mut data[..pkt_len]);
 
         // Parse the RTP header and CSRCs
         let header = r.unpack::<RtpHeader>()?;
         r.read(4 * (header.cc as usize))?;
+        */
 
         // Parse the extension header if present
         let ext_header = if header.x == 1 {
@@ -407,7 +439,7 @@ impl<'a> SrtpPacket<'a> {
             None
         };
 
-        let ext_start = r.close();
+        let ext_start = r.close() + header_end;
         let ext_size = match ext_header.as_ref() {
             Some(hdr) => 4 * (hdr.length_u32 as usize),
             None => 0,
