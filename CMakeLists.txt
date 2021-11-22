@@ -63,20 +63,6 @@ set(TEST_APPS ON CACHE BOOL "Build test applications")
 set(BUILD_WITH_SANITIZERS OFF CACHE BOOL "Adds sanitizer flags to compiler")
 option(BUILD_SHARED_LIBS "Build shared library" OFF)
 
-if(ENABLE_RUST)
-  find_package(Corrosion REQUIRED)
-
-  SET(CARGO_TOML "libsrtp_rs/Cargo.toml")
-  if (ENABLE_OPENSSL)
-    corrosion_import_crate(MANIFEST_PATH ${CARGO_TOML} NO_DEFAULT_FEATURES FEATURES cffi openssl-crypto)
-  else ()
-    corrosion_import_crate(MANIFEST_PATH ${CARGO_TOML} FEATURES cffi)
-  endif()
-
-  set(RUST ${ENABLE_RUST} CACHE BOOL INTERNAL)
-  set(GCM ${ENABLE_RUST} CACHE BOOL INTERNAL)
-endif()
-
 if(ENABLE_OPENSSL OR ENABLE_MBEDTLS OR ENABLE_NSS)
   set(USE_EXTERNAL_CRYPTO TRUE)
 else()
@@ -108,6 +94,32 @@ if(ENABLE_NSS)
   find_package(NSS REQUIRED)
   set(NSS ${ENABLE_NSS} CACHE BOOL INTERNAL)
   set(GCM ${ENABLE_NSS} CACHE BOOL INTERNAL)
+endif()
+
+if(ENABLE_RUST)
+  find_package(Corrosion REQUIRED)
+
+  SET(CARGO_TOML "libsrtp_rs/Cargo.toml")
+  if (ENABLE_OPENSSL)
+    corrosion_import_crate(MANIFEST_PATH ${CARGO_TOML} NO_DEFAULT_FEATURES FEATURES cffi openssl-crypto)
+
+    # Use the same OpenSSL as CMake, for better C/Rust comparability
+    get_filename_component(OPENSSL_CRYPTO_LIB_DIR ${OPENSSL_CRYPTO_LIBRARY} DIRECTORY)
+    message(STATUS "OpenSSL crypto lib dir: [${OPENSSL_CRYPTO_LIBRARY}]")
+    message(STATUS "OpenSSL crypto lib dir: [${OPENSSL_CRYPTO_LIB_DIR}]")
+
+    set_property(TARGET libsrtp_rs
+      APPEND PROPERTY CORROSION_ENVIRONMENT_VARIABLES
+      OPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR})
+    set_property(TARGET libsrtp_rs
+      APPEND PROPERTY CORROSION_ENVIRONMENT_VARIABLES
+      OPENSSL_LIB_DIR=${OPENSSL_CRYPTO_LIB_DIR})
+  else ()
+    corrosion_import_crate(MANIFEST_PATH ${CARGO_TOML} FEATURES cffi)
+  endif()
+
+  set(RUST ${ENABLE_RUST} CACHE BOOL INTERNAL)
+  set(GCM ${ENABLE_RUST} CACHE BOOL INTERNAL)
 endif()
 
 set(CONFIG_FILE_DIR ${CMAKE_CURRENT_BINARY_DIR})
