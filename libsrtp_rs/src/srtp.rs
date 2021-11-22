@@ -16,6 +16,7 @@ pub enum Error {
     // TODO(RLB): During translation, we are promoting this as needed, to make sure we only end up with the set we need
     Fail = 1,        // unspecified failure
     BadParam = 2,    // unsupported parameter
+    AllocFail = 3,   // couldn't allocate memory
     InitFail = 5,    // couldn't initialize
     Terminus = 6,    // can't process as much data as requested
     AuthFail = 7,    // authentication failure
@@ -31,7 +32,6 @@ pub enum Error {
     PacketIndexOld = 26, // packet index is too old to consider
 
                      /*
-                     alloc_fail = 3,     // couldn't allocate memory
                      dealloc_fail = 4,   // couldn't deallocate properly
                      cant_check = 14,    // unable to perform desired validation
                      socket_err = 16,    // error in use of socket
